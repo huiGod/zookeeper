@@ -36,6 +36,8 @@ import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
  *
  * <h2>Configuration file</h2>
  *
+ * main 方法第一个参数为 config 配置文件路径，用于获取配置信息
+ *
  * When the main() method of this class is used to start the program, the first
  * argument is used as a path to the config file, which will be used to obtain
  * configuration information. This file is a Properties file, so keys and
@@ -44,20 +46,29 @@ import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
  * configuration file. For full details on this see the documentation in
  * docs/index.html
  * <ol>
+ * 数据存放目录
  * <li>dataDir - The directory where the ZooKeeper data is stored.</li>
+ * 事务日志存放目录
  * <li>dataLogDir - The directory where the ZooKeeper transaction log is stored.</li>
+ * 与客户端通信的端口号
  * <li>clientPort - The port used to communicate with clients.</li>
+ * 基本时间单位
  * <li>tickTime - The duration of a tick in milliseconds. This is the basic
  * unit of time in ZooKeeper.</li>
+ * follower启动时向 leader 同步数据的最长等待时间
  * <li>initLimit - The maximum number of ticks that a follower will wait to
  * initially synchronize with a leader.</li>
+ * follower向 leader 同步消息的最长等待时间
  * <li>syncLimit - The maximum number of ticks that a follower will wait for a
  * message (including heartbeats) from the leader.</li>
+ * 服务地址
  * <li>server.<i>id</i> - This is the host:port[:port] that the server with the
  * given id will use for the quorum protocol.</li>
  * </ol>
  * In addition to the config file. There is a file in the data directory called
  * "myid" that contains the server id as an ASCII decimal value.
+ *
+ *
  *
  */
 public class QuorumPeerMain {
@@ -96,17 +107,20 @@ public class QuorumPeerMain {
     protected void initializeAndRun(String[] args)
         throws ConfigException, IOException
     {
+        //解析配置文件，传入一个参数表示配置文件地址
         QuorumPeerConfig config = new QuorumPeerConfig();
         if (args.length == 1) {
             config.parse(args[0]);
         }
 
+        //启动后台线程，定期清理 zk 的日志和快照文件
         // Start and schedule the the purge task
         DatadirCleanupManager purgeMgr = new DatadirCleanupManager(config
                 .getDataDir(), config.getDataLogDir(), config
                 .getSnapRetainCount(), config.getPurgeInterval());
         purgeMgr.start();
 
+        //配置多个servers则以集群方式启动，否则单机模式启动
         if (args.length == 1 && config.servers.size() > 0) {
             runFromConfig(config);
         } else {
@@ -123,15 +137,17 @@ public class QuorumPeerMain {
       } catch (JMException e) {
           LOG.warn("Unable to register log4j JMX control", e);
       }
-  
+
       LOG.info("Starting quorum peer");
       try {
           ServerCnxnFactory cnxnFactory = ServerCnxnFactory.createFactory();
           cnxnFactory.configure(config.getClientPortAddress(),
                                 config.getMaxClientCnxns());
-  
+
+          //QuorumPeer投票组件线程
           quorumPeer = new QuorumPeer();
           quorumPeer.setClientPortAddress(config.getClientPortAddress());
+          //管理磁盘文件数据，用于启动时恢复日志数据
           quorumPeer.setTxnFactory(new FileTxnSnapLog(
                       new File(config.getDataLogDir()),
                       new File(config.getDataDir())));
@@ -145,9 +161,11 @@ public class QuorumPeerMain {
           quorumPeer.setSyncLimit(config.getSyncLimit());
           quorumPeer.setQuorumVerifier(config.getQuorumVerifier());
           quorumPeer.setCnxnFactory(cnxnFactory);
+          //初始化内存数据库
           quorumPeer.setZKDatabase(new ZKDatabase(quorumPeer.getTxnFactory()));
           quorumPeer.setLearnerType(config.getPeerType());
-  
+
+          //启动线程
           quorumPeer.start();
           quorumPeer.join();
       } catch (InterruptedException e) {

@@ -49,6 +49,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
+ * 包括以下三种状态：
  * This class manages the quorum protocol. There are three states this server
  * can be in:
  * <ol>
