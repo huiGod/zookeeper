@@ -34,7 +34,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
 import org.apache.zookeeper.common.AtomicFileOutputStream;
 import org.apache.zookeeper.jmx.MBeanRegistry;
 import org.apache.zookeeper.jmx.ZKMBeanInfo;
@@ -407,8 +406,12 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
     
     @Override
     public synchronized void start() {
+        //从磁盘加载数据文件到内存
         loadDataBase();
-        cnxnFactory.start();        
+
+        cnxnFactory.start();
+
+        //初始化 leader 选举算法
         startLeaderElection();
         super.start();
     }
@@ -464,12 +467,14 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
     }
     synchronized public void startLeaderElection() {
     	try {
+    	    //通过 myid、zxid 和 epoch构造投票的选票
     		currentVote = new Vote(myid, getLastLoggedZxid(), getCurrentEpoch());
     	} catch(IOException e) {
     		RuntimeException re = new RuntimeException(e.getMessage());
     		re.setStackTrace(e.getStackTrace());
     		throw re;
     	}
+    	//通过配置文件中的myid遍历出当前机器的地址
         for (QuorumServer p : getView().values()) {
             if (p.id == myid) {
                 myQuorumAddr = p.addr;
@@ -488,6 +493,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
                 throw new RuntimeException(e);
             }
         }
+        //构造选举算法
         this.electionAlg = createElectionAlgorithm(electionType);
     }
     
@@ -582,6 +588,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
         case 2:
             le = new AuthFastLeaderElection(this, true);
             break;
+            //默认用该选举算法
         case 3:
             qcm = new QuorumCnxManager(this);
             QuorumCnxManager.Listener listener = qcm.listener;

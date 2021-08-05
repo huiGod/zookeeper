@@ -149,7 +149,8 @@ public class QuorumCnxManager {
         
         this.self = self;
 
-        // Starts listener thread that waits for connection requests 
+        // Starts listener thread that waits for connection requests
+        //启动监听线程用于等待连接请求
         listener = new Listener();
     }
 
@@ -223,6 +224,8 @@ public class QuorumCnxManager {
      * connection if it wins. Notice that it checks whether it has a connection
      * to this server already or not. If it does, then it sends the smallest
      * possible long value to lose the challenge.
+     *
+     * 作为服务端接收到其他 server 的连接后，需要判断是否重新创建了连接，有必要的话需要断开连接
      * 
      */
     public boolean receiveConnection(Socket sock) {
@@ -230,6 +233,7 @@ public class QuorumCnxManager {
         
         try {
             // Read server id
+            //接收客户端发送的 myid
             DataInputStream din = new DataInputStream(sock.getInputStream());
             sid = din.readLong();
             if (sid == QuorumPeer.OBSERVER_ID) {
@@ -465,6 +469,7 @@ public class QuorumCnxManager {
 
     /**
      * Thread to listen on some port
+     * 监听其他 server 的连接
      */
     public class Listener extends Thread {
 
@@ -480,6 +485,7 @@ public class QuorumCnxManager {
                 try {
                     ss = new ServerSocket();
                     ss.setReuseAddress(true);
+                    //server 之间选举使用的是配置地址中最后的端口号
                     int port = self.quorumPeers.get(self.getId()).electionAddr
                             .getPort();
                     InetSocketAddress addr = new InetSocketAddress(port);
@@ -487,11 +493,14 @@ public class QuorumCnxManager {
                     setName(self.quorumPeers.get(self.getId()).electionAddr
                             .toString());
                     ss.bind(addr);
+                    //监听指定端口号，有客户端连接则进行后续处理
                     while (!shutdown) {
                         Socket client = ss.accept();
+                        //设置客户端 Socket 的 NoDelay 和超时时间
                         setSockOpts(client);
                         LOG.info("Received connection request "
                                 + client.getRemoteSocketAddress());
+                        //处理客户端连接
                         receiveConnection(client);
                         numRetries = 0;
                     }
