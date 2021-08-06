@@ -56,6 +56,10 @@ import org.slf4j.LoggerFactory;
  * message to the tail of the queue, thus changing the order of messages.
  * Although this is not a problem for the leader election, it could be a problem
  * when consolidating peer communication. This is to be verified, though.
+ *
+ * 该类实现用于管理leader选举的tcp网络连接，会确保对于server之间只会保持一个连接可用
+ *
+ * 对于每个server都维护一个用于发送消息的队列，sender线程会发将队列中消息发送给其他server
  * 
  */
 
@@ -136,6 +140,10 @@ public class QuorumCnxManager {
         long sid;
     }
 
+    /**
+     * 初始化一些内存数据结构用于网络连接之间的消息发送与接收
+     * @param self
+     */
     public QuorumCnxManager(QuorumPeer self) {
         this.recvQueue = new ArrayBlockingQueue<Message>(RECV_CAPACITY);
         this.queueSendMap = new ConcurrentHashMap<Long, ArrayBlockingQueue<ByteBuffer>>();
@@ -172,11 +180,14 @@ public class QuorumCnxManager {
     /**
      * If this server has initiated the connection, then it gives up on the
      * connection if it loses challenge. Otherwise, it keeps the connection.
+     *
+     * 通过myid的比较，有一些策略来关闭socket连接，避免重复创建
      */
     public boolean initiateConnection(Socket sock, Long sid) {
         DataOutputStream dout = null;
         try {
             // Sending id and challenge
+            //作为客户端向服务端创建连接后，发送本身的myid
             dout = new DataOutputStream(sock.getOutputStream());
             dout.writeLong(self.getId());
             dout.flush();
@@ -185,7 +196,8 @@ public class QuorumCnxManager {
             closeSocket(sock);
             return false;
         }
-        
+
+        //如果服务端myid大于当前server的myid，则直接断开连接
         // If lost the challenge, then drop the new connection
         if (sid > self.getId()) {
             LOG.info("Have smaller server identifier, so dropping the " +
@@ -193,6 +205,7 @@ public class QuorumCnxManager {
             closeSocket(sock);
             // Otherwise proceed with the connection
         } else {
+            //初始化发送与接收消息的线程
             SendWorker sw = new SendWorker(sock, sid);
             RecvWorker rw = new RecvWorker(sock, sid, sw);
             sw.setRecv(rw);
@@ -207,7 +220,8 @@ public class QuorumCnxManager {
                 queueSendMap.put(sid, new ArrayBlockingQueue<ByteBuffer>(
                         SEND_CAPACITY));
             }
-            
+
+            //启动线程
             sw.start();
             rw.start();
             
@@ -252,6 +266,7 @@ public class QuorumCnxManager {
         }
         
         //If wins the challenge, then close the new connection.
+        //如果客户端的myid小于当前server的myid，则关闭该socket连接
         if (sid < self.getId()) {
             /*
              * This replica might still believe that the connection to sid is
@@ -260,6 +275,7 @@ public class QuorumCnxManager {
              */
             SendWorker sw = senderWorkerMap.get(sid);
             if (sw != null) {
+                //释放资源
                 sw.finish();
             }
 
@@ -267,6 +283,7 @@ public class QuorumCnxManager {
              * Now we start a new connection
              */
             LOG.debug("Create new connection to server: " + sid);
+            //关闭socket连接
             closeSocket(sock);
             connectOne(sid);
 
@@ -304,6 +321,7 @@ public class QuorumCnxManager {
         /*
          * If sending message to myself, then simply enqueue it (loopback).
          */
+        //如果发送给当前server，则直接构造响应加入到响应队列
         if (self.getId() == sid) {
              b.position(0);
              addToRecvQueue(new Message(b.duplicate(), sid));
@@ -317,6 +335,7 @@ public class QuorumCnxManager {
              if (!queueSendMap.containsKey(sid)) {
                  ArrayBlockingQueue<ByteBuffer> bq = new ArrayBlockingQueue<ByteBuffer>(
                          SEND_CAPACITY);
+                 //给指定myid初始化队列
                  queueSendMap.put(sid, bq);
                  addToSendQueue(bq, b);
 
@@ -328,6 +347,7 @@ public class QuorumCnxManager {
                      LOG.error("No queue for server " + sid);
                  }
              }
+             //同server建立网络连接
              connectOne(sid);
                 
         }
@@ -340,8 +360,10 @@ public class QuorumCnxManager {
      */
     
     synchronized void connectOne(long sid){
+        //连接不存在才出发创建新的socket连接
         if (senderWorkerMap.get(sid) == null){
             InetSocketAddress electionAddr;
+            //从配置文件中获取server的地址
             if (self.quorumPeers.containsKey(sid)) {
                 electionAddr = self.quorumPeers.get(sid).electionAddr;
             } else {
@@ -355,10 +377,12 @@ public class QuorumCnxManager {
                 }
                 Socket sock = new Socket();
                 setSockOpts(sock);
+                //向服务端server创建连接
                 sock.connect(self.getView().get(sid).electionAddr, cnxTO);
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Connected to server " + sid);
                 }
+                //初始化连接操作，并保存socket连接
                 initiateConnection(sock, sid);
             } catch (UnresolvedAddressException e) {
                 // Sun doesn't include the address that causes this
@@ -469,7 +493,7 @@ public class QuorumCnxManager {
 
     /**
      * Thread to listen on some port
-     * 监听其他 server 的连接
+     * 每个server都作为ServerSocket来监听其他server作为客户端来连接
      */
     public class Listener extends Thread {
 
@@ -493,7 +517,7 @@ public class QuorumCnxManager {
                     setName(self.quorumPeers.get(self.getId()).electionAddr
                             .toString());
                     ss.bind(addr);
-                    //监听指定端口号，有客户端连接则进行后续处理
+                    //循环监听指定端口号，有客户端连接则进行后续处理
                     while (!shutdown) {
                         Socket client = ss.accept();
                         //设置客户端 Socket 的 NoDelay 和超时时间
@@ -625,12 +649,15 @@ public class QuorumCnxManager {
             byte[] msgBytes = new byte[b.capacity()];
             try {
                 b.position(0);
+                //从b中读取所有数据到字节数组msgBytes
                 b.get(msgBytes);
             } catch (BufferUnderflowException be) {
                 LOG.error("BufferUnderflowException ", be);
                 return;
             }
+            //也是先发送数据长度
             dout.writeInt(b.capacity());
+            //再发送数据字节
             dout.write(b.array());
             dout.flush();
         }
@@ -653,6 +680,7 @@ public class QuorumCnxManager {
                  * stale message, we should send the message in the send queue.
                  */
                 ArrayBlockingQueue<ByteBuffer> bq = queueSendMap.get(sid);
+                //如果队列中没有数据需要发送，则发送上一次的消息数据
                 if (bq == null || isSendQueueEmpty(bq)) {
                    ByteBuffer b = lastMessageSent.get(sid);
                    if (b != null) {
@@ -673,6 +701,7 @@ public class QuorumCnxManager {
                         ArrayBlockingQueue<ByteBuffer> bq = queueSendMap
                                 .get(sid);
                         if (bq != null) {
+                            //从需要发送消息的队列中获取数据
                             b = pollSendQueue(bq, 1000, TimeUnit.MILLISECONDS);
                         } else {
                             LOG.error("No queue of incoming messages for " +
@@ -681,7 +710,9 @@ public class QuorumCnxManager {
                         }
 
                         if(b != null){
+                            //将最近发送的消息保存到SendWorker线程发送消息中
                             lastMessageSent.put(sid, b);
+                            //将消息进行发送
                             send(b);
                         }
                     } catch (InterruptedException e) {
@@ -797,6 +828,7 @@ public class QuorumCnxManager {
      *          Reference to the Queue
      * @param buffer
      *          Reference to the buffer to be inserted in the queue
+     * 如果队列满，删除队头元素再加入队列中
      */
     private void addToSendQueue(ArrayBlockingQueue<ByteBuffer> queue,
           ByteBuffer buffer) {
@@ -862,6 +894,7 @@ public class QuorumCnxManager {
      */
     public void addToRecvQueue(Message msg) {
         synchronized(recvQLock) {
+            //如果队列满了，从队头移除元素再插入数据
             if (recvQueue.remainingCapacity() == 0) {
                 try {
                     recvQueue.remove();

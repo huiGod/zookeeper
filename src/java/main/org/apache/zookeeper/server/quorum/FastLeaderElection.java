@@ -178,6 +178,8 @@ public class FastLeaderElection implements Election {
      * implements two sub-classes: WorkReceiver and  WorkSender. The
      * functionality of each is obvious from the name. Each of these
      * spawns a new thread.
+     *
+     * 多线程实现用于发送和接受消息
      */
 
     private class Messenger {
@@ -202,6 +204,7 @@ public class FastLeaderElection implements Election {
                 while (!stop) {
                     // Sleeps on receive
                     try{
+                        //从recvQueue队列获取接收到的数据进行后续处理
                         response = manager.pollRecvQueue(3000, TimeUnit.MILLISECONDS);
                         if(response == null) continue;
 
@@ -213,6 +216,7 @@ public class FastLeaderElection implements Election {
                          * learner in the future, we'll have to change the
                          * way we check for observers.
                          */
+                        //如果本地不包含响应中的myid，则表示属于observer节点
                         if(!self.getVotingView().containsKey(response.sid)){
                             Vote current = self.getCurrentVote();
                             ToSend notmsg = new ToSend(ToSend.mType.notification,
@@ -260,6 +264,7 @@ public class FastLeaderElection implements Election {
                             }
 
                             // Instantiate Notification and set its attributes
+                            //将接收到的消息进行解析
                             Notification n = new Notification();
                             n.leader = response.buffer.getLong();
                             n.zxid = response.buffer.getLong();
@@ -272,6 +277,7 @@ public class FastLeaderElection implements Election {
                                 if(LOG.isInfoEnabled()){
                                     LOG.info("Backward compatibility mode, server id=" + n.sid);
                                 }
+                                //zxid的前32位就是epoch版本号
                                 n.peerEpoch = ZxidUtils.getEpochFromZxid(n.zxid);
                             }
 
@@ -287,6 +293,7 @@ public class FastLeaderElection implements Election {
                              */
 
                             if(self.getPeerState() == QuorumPeer.ServerState.LOOKING){
+                                //如果当前server的状态是LOOKING，则继续发送接收到的Notification消息进行再次投票
                                 recvqueue.offer(n);
 
                                 /*
@@ -294,6 +301,7 @@ public class FastLeaderElection implements Election {
                                  * message is also looking and its logical clock is
                                  * lagging behind.
                                  */
+                                //如果响应的数据是LOOKING状态，则发送当前server的投票信息
                                 if((ackstate == QuorumPeer.ServerState.LOOKING)
                                         && (n.electionEpoch < logicalclock)){
                                     Vote v = getVote();
@@ -311,6 +319,7 @@ public class FastLeaderElection implements Election {
                                  * If this server is not looking, but the one that sent the ack
                                  * is looking, then send back what it believes to be the leader.
                                  */
+                                //如果当前server已经知道投票结果，也就是leader信息，但是接收到其他server的消息状态是LOOKING，则将Leader信息发送回去
                                 Vote current = self.getCurrentVote();
                                 if(ackstate == QuorumPeer.ServerState.LOOKING){
                                     if(LOG.isDebugEnabled()){
@@ -362,6 +371,7 @@ public class FastLeaderElection implements Election {
                         ToSend m = sendqueue.poll(3000, TimeUnit.MILLISECONDS);
                         if(m == null) continue;
 
+                        //从sendqueue队列获取需要发送的数据来处理
                         process(m);
                     } catch (InterruptedException e) {
                         break;
@@ -390,6 +400,7 @@ public class FastLeaderElection implements Election {
                 requestBuffer.putLong(m.electionEpoch);
                 requestBuffer.putLong(m.peerEpoch);
 
+                //最终调用的是QuorumCnxManager进行网络传输发送出去
                 manager.toSend(m.sid, requestBuffer);
 
             }
@@ -483,8 +494,10 @@ public class FastLeaderElection implements Election {
         proposedLeader = -1;
         proposedZxid = -1;
 
+        //初始化队列
         sendqueue = new LinkedBlockingQueue<ToSend>();
         recvqueue = new LinkedBlockingQueue<Notification>();
+        //初始化Messenger组件，用不同的线程来处理网络传输的数据
         this.messenger = new Messenger(manager);
     }
 
@@ -533,6 +546,7 @@ public class FastLeaderElection implements Election {
                       " (n.round), " + sid + " (recipient), " + self.getId() +
                       " (myid), 0x" + Long.toHexString(proposedEpoch) + " (n.peerEpoch)");
             }
+            //将需要发送的消息数据加入到队列中
             sendqueue.offer(notmsg);
         }
     }
@@ -712,6 +726,8 @@ public class FastLeaderElection implements Election {
      * Starts a new round of leader election. Whenever our QuorumPeer
      * changes its state to LOOKING, this method is invoked, and it
      * sends notifications to all other peers.
+     *
+     * 启动新一轮的投票，每当当前server的状态变为LOOKING时，该方法就会别调用，并会发送消息给所有server
      */
     public Vote lookForLeader() throws InterruptedException {
         try {
@@ -734,17 +750,20 @@ public class FastLeaderElection implements Election {
 
             synchronized(this){
                 logicalclock++;
+                //封装当前server的投票数据,由myid、zxid、epoch组成
                 updateProposal(getInitId(), getInitLastLoggedZxid(), getPeerEpoch());
             }
 
             LOG.info("New election. My id =  " + self.getId() +
                     ", proposed zxid=0x" + Long.toHexString(proposedZxid));
+            //将自己的投票发送给其他所有server
             sendNotifications();
 
             /*
              * Loop in which we exchange notifications until we find a leader
              */
 
+            //循环投票，直到选出leader
             while ((self.getPeerState() == ServerState.LOOKING) &&
                     (!stop)){
                 /*

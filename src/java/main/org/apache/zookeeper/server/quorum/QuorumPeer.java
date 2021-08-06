@@ -334,6 +334,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
         }
     }
 
+    //默认状态就是LOOKING
     private ServerState state = ServerState.LOOKING;
 
     public synchronized void setPeerState(ServerState newState){
@@ -413,6 +414,8 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
 
         //初始化 leader 选举算法
         startLeaderElection();
+
+        //启动QuorumPeer线程
         super.start();
     }
 
@@ -467,14 +470,14 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
     }
     synchronized public void startLeaderElection() {
     	try {
-    	    //通过 myid、zxid 和 epoch构造投票的选票
+    	  //通过 myid、zxid 和 epoch构造投票的选票
     		currentVote = new Vote(myid, getLastLoggedZxid(), getCurrentEpoch());
     	} catch(IOException e) {
     		RuntimeException re = new RuntimeException(e.getMessage());
     		re.setStackTrace(e.getStackTrace());
     		throw re;
     	}
-    	//通过配置文件中的myid遍历出当前机器的地址
+    	  //通过配置文件中的myid遍历出当前机器的地址
         for (QuorumServer p : getView().values()) {
             if (p.id == myid) {
                 myQuorumAddr = p.addr;
@@ -590,10 +593,13 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
             break;
             //默认用该选举算法
         case 3:
+            //构造QuorumCnxManager组件用于管理server之间的tcp连接
             qcm = new QuorumCnxManager(this);
             QuorumCnxManager.Listener listener = qcm.listener;
             if(listener != null){
+                //启动Listener线程，用于监听其他server客户端的连接
                 listener.start();
+                //构建leader选举算法
                 le = new FastLeaderElection(this, qcm);
             } else {
                 LOG.error("Null listener when initializing cnx manager");
@@ -641,6 +647,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
                 cnxnFactory.getLocalAddress());
 
         LOG.debug("Starting quorum peer");
+        //都是JMX处理，忽略
         try {
             jmxQuorumBean = new QuorumBean(this);
             MBeanRegistry.getInstance().register(jmxQuorumBean, null);
@@ -674,6 +681,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
              */
             while (running) {
                 switch (getPeerState()) {
+                    //默认状态LOOKING
                 case LOOKING:
                     LOG.info("LOOKING");
 
@@ -721,6 +729,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
                         }
                     } else {
                         try {
+                            //调用之前初始化的FastLeaderElection算法进行投票
                             setCurrentVote(makeLEStrategy().lookForLeader());
                         } catch (Exception e) {
                             LOG.warn("Unexpected exception", e);
