@@ -730,6 +730,8 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
                     } else {
                         try {
                             //调用之前初始化的FastLeaderElection算法进行投票
+                            //lookForLeader一定会选出 leader，这里会被卡住
+                            //方法返回后，设置选票，在下一次循环执行作为各个状态的事情
                             setCurrentVote(makeLEStrategy().lookForLeader());
                         } catch (Exception e) {
                             LOG.warn("Unexpected exception", e);

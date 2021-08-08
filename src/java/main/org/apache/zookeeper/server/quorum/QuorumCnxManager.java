@@ -240,6 +240,7 @@ public class QuorumCnxManager {
      * possible long value to lose the challenge.
      *
      * 作为服务端接收到其他 server 的连接后，需要判断是否重新创建了连接，有必要的话需要断开连接
+     * 也就是只有 myid 比较大的 server 可以作为客户端向 myid 较小的 server 发起连接创建
      * 
      */
     public boolean receiveConnection(Socket sock) {
@@ -285,10 +286,14 @@ public class QuorumCnxManager {
             LOG.debug("Create new connection to server: " + sid);
             //关闭socket连接
             closeSocket(sock);
+            //每个 server 都会有 Listerer 来监听其他 server 作为客户端发起连接的创建
+            //并且每个 server只允许向比自己 myid 要小的 server 发起连接的创建
+            //不满足上述条件的 socket 会被删除，来避免重复的 socket 连接被创建
             connectOne(sid);
 
             // Otherwise start worker threads to receive data.
         } else {
+            //如果连接正常建立则启动发送与接收消息的线程
             SendWorker sw = new SendWorker(sock, sid);
             RecvWorker rw = new RecvWorker(sock, sid, sw);
             sw.setRecv(rw);
@@ -420,6 +425,8 @@ public class QuorumCnxManager {
 
     /**
      * Check if all queues are empty, indicating that all messages have been delivered.
+     * 只要有一个队列为0就返回true，后面就不看了，因为之前说过只要有一个队列为空，就说明当前Server与zk集群的连接没有问题
+     * 只有当所有队列都不为空，才说明当前Server与zk集群失联
      */
     boolean haveDelivered() {
         for (ArrayBlockingQueue<ByteBuffer> queue : queueSendMap.values()) {
@@ -732,6 +739,7 @@ public class QuorumCnxManager {
     /**
      * Thread to receive messages. Instance waits on a socket read. If the
      * channel breaks, then removes itself from the pool of receivers.
+     * 从 socket 中读取消息数据
      */
     class RecvWorker extends Thread {
         Long sid;
@@ -785,6 +793,7 @@ public class QuorumCnxManager {
                      * message
                      */
                     int length = din.readInt();
+                    //消息大小的限制
                     if (length <= 0 || length > PACKETMAXSIZE) {
                         throw new IOException(
                                 "Received packet with invalid packet: "
@@ -793,6 +802,7 @@ public class QuorumCnxManager {
                     /**
                      * Allocates a new ByteBuffer to receive the message
                      */
+                    //分配指定大小ByteBuffer接收消息
                     byte[] msgArray = new byte[length];
                     din.readFully(msgArray, 0, length);
                     ByteBuffer message = ByteBuffer.wrap(msgArray);
