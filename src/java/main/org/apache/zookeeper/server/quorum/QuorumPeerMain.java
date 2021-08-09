@@ -105,7 +105,7 @@ public class QuorumPeerMain {
     protected void initializeAndRun(String[] args)
         throws ConfigException, IOException
     {
-        //解析配置文件，传入一个参数表示配置文件地址
+        //解析配置文件，传入一个参数表示配置文件路径
         QuorumPeerConfig config = new QuorumPeerConfig();
         if (args.length == 1) {
             config.parse(args[0]);

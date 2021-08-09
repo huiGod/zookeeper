@@ -591,8 +591,8 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
         case 2:
             le = new AuthFastLeaderElection(this, true);
             break;
-            //默认用该选举算法
         case 3:
+            //默认用该选举算法
             //构造QuorumCnxManager组件用于管理server之间的tcp连接
             qcm = new QuorumCnxManager(this);
             QuorumCnxManager.Listener listener = qcm.listener;
@@ -679,6 +679,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
             /*
              * Main loop
              */
+            //在默认情况下当前server为LOOKING，直到leader被选出，才会break，后续根据选举出的状态执行leading或者following的逻辑
             while (running) {
                 switch (getPeerState()) {
                     //默认状态LOOKING

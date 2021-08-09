@@ -767,6 +767,7 @@ public class FastLeaderElection implements Election {
             int notTimeout = finalizeWait;
 
             synchronized(this){
+                //每次选举默认都是相同的版本号，除非重启后会不同
                 logicalclock++;
                 //封装投票信息由myid、zxid、epoch组成。开始都会将自己作为 leader 选票
                 updateProposal(getInitId(), getInitLastLoggedZxid(), getPeerEpoch());
@@ -774,7 +775,7 @@ public class FastLeaderElection implements Election {
 
             LOG.info("New election. My id =  " + self.getId() +
                     ", proposed zxid=0x" + Long.toHexString(proposedZxid));
-            //将自己的投票发送给其他所有server
+            //将自己的投票发送给所有server(包括自己)
             sendNotifications();
 
             /*
@@ -797,10 +798,8 @@ public class FastLeaderElection implements Election {
                  * Sends more notifications if haven't received enough.
                  * Otherwise processes new notification.
                  */
-                //什么情况取出来是空呢？
-                //假如广播出去8个，由于网络原因可能只收到3个，第四次取的时候就是空的
-                //还有可能收到8个了，但是选举还没结束，再次取的时候也是空的
-                //总之就是为了保证选举还没结束的时候，能继续收到其他Server的选票，并继续处理判断，直到选出Leader
+                //每台服务器会不断地从recvqueue队列中获取外部选票。如果服务器发现无法获取到任何外部投票，
+                //那么就会立即确认自己是否和集群中其他服务器保持着有效的连接，如果没有连接，则马上建立连接，如果已经建立了连接，则再次发送自己当前的内部投票
                 if(n == null){
                     //简单来说该方法就是判断是否和集群失联，返回false表示失联
                     if(manager.haveDelivered()){
@@ -831,9 +830,8 @@ public class FastLeaderElection implements Election {
                     switch (n.state) {
                     case LOOKING:
 
-                        //验证自己与大家的投票谁更适合做leader
-
-                        //如果接收到的选票版本号大于当前 server
+                        //外部投票的选举轮次大于内部投票。若服务器自身的选举轮次落后于该外部投票对应服务器的选举轮次，
+                        // 那么就会立即更新自己的选举轮次(logicalclock)，并且清空所有已经收到的投票，然后使用初始化的投票来进行PK以确定是否变更内部投票。最终再将内部投票发送出去
                         // If notification > current, replace and send messages out
                         if (n.electionEpoch > logicalclock) {
                             //更新当前 server 所在的选举的版本号
@@ -855,7 +853,7 @@ public class FastLeaderElection implements Election {
                             //将决策后的选票再次广播出去
                             sendNotifications();
                         } else if (n.electionEpoch < logicalclock) {
-                            //如果接收到的选票版本号小于当前 server则说明过期抛弃不处理
+                            //外部投票的选举轮次小于内部投票。若服务器接收的外选票的选举轮次落后于自身的选举轮次，那么Zookeeper就会直接忽略该外部投票，不做任何处理
                             if(LOG.isDebugEnabled()){
                                 LOG.debug("Notification election epoch is smaller than logicalclock. n.electionEpoch = 0x"
                                         + Long.toHexString(n.electionEpoch)
