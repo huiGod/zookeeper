@@ -767,9 +767,12 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
                     }
                     break;
                 case LEADING:
+                    //如果投票结束，当前server是leader则执行对应逻辑
                     LOG.info("LEADING");
                     try {
+                        //初始化Leader对象
                         setLeader(makeLeader(logFactory));
+                        //调用其lead方法处理lead的逻辑
                         leader.lead();
                         setLeader(null);
                     } catch (Exception e) {

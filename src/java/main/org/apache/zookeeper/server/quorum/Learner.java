@@ -237,6 +237,7 @@ public class Learner {
             }
             Thread.sleep(1000);
         }
+        //socket连接创建成功后封装为输入、输出流
         leaderIs = BinaryInputArchive.getArchive(new BufferedInputStream(
                 sock.getInputStream()));
         bufferedOutput = new BufferedOutputStream(sock.getOutputStream());
@@ -254,11 +255,13 @@ public class Learner {
         /*
          * Send follower info, including last zxid and sid
          */
+        //获取最新的zxid
     	long lastLoggedZxid = self.getLastLoggedZxid();
-        QuorumPacket qp = new QuorumPacket();                
+        QuorumPacket qp = new QuorumPacket();
         qp.setType(pktType);
+        //从版本号中获取zxid
         qp.setZxid(ZxidUtils.makeZxid(self.getAcceptedEpoch(), 0));
-        
+
         /*
          * Add sid to payload
          */
@@ -267,11 +270,15 @@ public class Learner {
         BinaryOutputArchive boa = BinaryOutputArchive.getArchive(bsid);
         boa.writeRecord(li, "LearnerInfo");
         qp.setData(bsid.toByteArray());
-        
+
+        //序列化后发送给leader
         writePacket(qp, true);
-        readPacket(qp);        
+
+        //从leader读取响应数据
+        readPacket(qp);
         final long newEpoch = ZxidUtils.getEpochFromZxid(qp.getZxid());
 		if (qp.getType() == Leader.LEADERINFO) {
+		    //接收到leader发送的数据后，需要返回ack
         	// we are connected to a 1.0 server so accept the new epoch and read the next packet
         	leaderProtocolVersion = ByteBuffer.wrap(qp.getData()).getInt();
         	byte epochBytes[] = new byte[4];
@@ -289,6 +296,7 @@ public class Learner {
         		throw new IOException("Leaders epoch, " + newEpoch + " is less than accepted epoch, " + self.getAcceptedEpoch());
         	}
         	QuorumPacket ackNewEpoch = new QuorumPacket(Leader.ACKEPOCH, lastLoggedZxid, epochBytes, null);
+        	//发送ack
         	writePacket(ackNewEpoch, true);
             return ZxidUtils.makeZxid(newEpoch, 0);
         } else {

@@ -229,22 +229,27 @@ public class LearnerHandler extends Thread {
     /**
      * This thread will receive packets from the peer and process them and
      * also listen to new connections from new peers.
+     * 处理follower对应的socket
      */
     @Override
     public void run() {
-        try {            
+        try {
+            //封装socket输入流
             ia = BinaryInputArchive.getArchive(new BufferedInputStream(sock
                     .getInputStream()));
             bufferedOutput = new BufferedOutputStream(sock.getOutputStream());
+            //封装socket输出流
             oa = BinaryOutputArchive.getArchive(bufferedOutput);
 
             QuorumPacket qp = new QuorumPacket();
             ia.readRecord(qp, "packet");
+            //只能接收到来自follower或者observer的消息
             if(qp.getType() != Leader.FOLLOWERINFO && qp.getType() != Leader.OBSERVERINFO){
             	LOG.error("First packet " + qp.toString()
                         + " is not FOLLOWERINFO or OBSERVERINFO!");
                 return;
             }
+            //读取follower发送过来的sid，标识当前LearnerHandle处理的是哪个节点请求
             byte learnerInfoData[] = qp.getData();
             if (learnerInfoData != null) {
             	if (learnerInfoData.length == 8) {
@@ -266,12 +271,14 @@ public class LearnerHandler extends Thread {
             if (qp.getType() == Leader.OBSERVERINFO) {
                   learnerType = LearnerType.OBSERVER;
             }            
-            
+
+            //从zxid中获取follower/observer目前版本号
             long lastAcceptedEpoch = ZxidUtils.getEpochFromZxid(qp.getZxid());
             
             long peerLastZxid;
             StateSummary ss = null;
             long zxid = qp.getZxid();
+            //版本号处理
             long newEpoch = leader.getEpochToPropose(this.getSid(), lastAcceptedEpoch);
             
             if (this.getVersion() < 0x10000) {
@@ -284,9 +291,11 @@ public class LearnerHandler extends Thread {
                 byte ver[] = new byte[4];
                 ByteBuffer.wrap(ver).putInt(0x10000);
                 QuorumPacket newEpochPacket = new QuorumPacket(Leader.LEADERINFO, ZxidUtils.makeZxid(newEpoch, 0), ver, null);
+                //向follower发送leader的zxid
                 oa.writeRecord(newEpochPacket, "packet");
                 bufferedOutput.flush();
                 QuorumPacket ackEpochPacket = new QuorumPacket();
+                //获取follower返回的ack
                 ia.readRecord(ackEpochPacket, "packet");
                 if (ackEpochPacket.getType() != Leader.ACKEPOCH) {
                     LOG.error(ackEpochPacket.toString()
@@ -295,6 +304,7 @@ public class LearnerHandler extends Thread {
 				}
                 ByteBuffer bbepoch = ByteBuffer.wrap(ackEpochPacket.getData());
                 ss = new StateSummary(bbepoch.getInt(), ackEpochPacket.getZxid());
+                //等待大多数follower返回ack
                 leader.waitForEpochAck(this.getSid(), ss);
             }
             peerLastZxid = ss.getLastZxid();
@@ -304,11 +314,13 @@ public class LearnerHandler extends Thread {
             long zxidToSend = 0;
             long leaderLastZxid = 0;
             /** the packets that the follower needs to get updates from **/
+            //follower发送过来的zxid，表示从当前位置同步数据
             long updates = peerLastZxid;
             
             /* we are sending the diff check if we have proposals in memory to be able to 
              * send a diff to the 
-             */ 
+             */
+            //读写锁获取内存中的proposals数据
             ReentrantReadWriteLock lock = leader.zk.getZKDatabase().getLogLock();
             ReadLock rl = lock.readLock();
             try {
@@ -452,6 +464,7 @@ public class LearnerHandler extends Thread {
                 LOG.error("Next packet was supposed to be an ACK");
                 return;
             }
+            //处理接收到的ack
             leader.processAck(this.sid, qp.getZxid(), sock.getLocalSocketAddress());
             
             // now that the ack has been processed expect the syncLimit

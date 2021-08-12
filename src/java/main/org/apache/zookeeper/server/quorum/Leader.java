@@ -181,6 +181,7 @@ public class Leader {
         try {
             ss = new ServerSocket();
             ss.setReuseAddress(true);
+            //默认端口号2888
             ss.bind(new InetSocketAddress(self.getQuorumAddress().getPort()));
         } catch (BindException e) {
             LOG.error("Couldn't bind to port "
@@ -297,6 +298,7 @@ public class Leader {
             try {
                 while (!stop) {
                     try{
+                        //阻塞等待follower发起的连接
                         Socket s = ss.accept();
                         // start with the initLimit, once the ack is processed
                         // in LearnerHandler switch to the syncLimit
@@ -351,13 +353,16 @@ public class Leader {
 
         try {
             self.tick = 0;
+            //恢复session和内存数据
             zk.loadData();
             
             leaderStateSummary = new StateSummary(self.getCurrentEpoch(), zk.getLastProcessedZxid());
 
             // Start thread that waits for connection requests from 
             // new followers.
+            //启动监听线程来处理follower发起的连接请求
             cnxAcceptor = new LearnerCnxAcceptor();
+            //启动线程
             cnxAcceptor.start();
             
             readyToStart = true;

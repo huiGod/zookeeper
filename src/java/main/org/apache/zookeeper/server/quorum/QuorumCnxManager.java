@@ -238,7 +238,7 @@ public class QuorumCnxManager {
      * possible long value to lose the challenge.
      *
      * 作为服务端接收到其他 server 的连接后，需要判断是否重新创建了连接，有必要的话需要断开连接
-     * 也就是只有 myid 比较大的 server 可以作为客户端向 myid 较小的 server 发起连接创建
+     * 客户端的sid小于当前server的sid时，断开连接
      * 
      */
     public boolean receiveConnection(Socket sock) {
