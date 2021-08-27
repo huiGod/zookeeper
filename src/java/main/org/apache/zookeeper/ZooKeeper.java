@@ -82,6 +82,14 @@ import java.util.*;
  * the event handler a connection has been dropped. This special event has type
  * EventNone and state sKeeperStateDisconnected.
  *
+ * 客户端实现类
+ * 在ZooKeeper创建好与server的连接后，会生成sessionId，并且定期发送心跳给server来保持session有效性
+ * 一旦客户端超过一定时间没有发送心跳，将导致该session失效，无法再调用任何api操作，只能再创建新的客户端来进行有效操作
+ * 客户端的操作都有同步和异步，同步操作将会阻塞直到server返回响应；异步操作将加入队列后直接返回，再server返回响应后执行对应的回调
+ * 可以在server注册一些watch，一旦客户端进行了某些api操作，server会触发这些watch，然后发送对应的event给客户端。随后watch将会失效，也就是只会被触发一次
+ * 客户端需要实现watcher接口，来处理server发送的event事件
+ *
+ *
  */
 public class ZooKeeper {
 
@@ -342,6 +350,7 @@ public class ZooKeeper {
      * the watcher that will be notified of any changes in state. This
      * notification can come at any point before or after the constructor call
      * has returned.
+     *
      * <p>
      * The instantiated ZooKeeper client object will pick an arbitrary server
      * from the connectString and attempt to connect to it. If establishment of
@@ -350,6 +359,7 @@ public class ZooKeeper {
      * connection is established. The client will continue attempts until the
      * session is explicitly closed.
      * <p>
+     *
      * Added in 3.2.0: An optional "chroot" suffix may also be appended to the
      * connection string. This will run the client commands while interpreting
      * all paths relative to this root (similar to the unix chroot command).
@@ -373,6 +383,10 @@ public class ZooKeeper {
      *             in cases of network failure
      * @throws IllegalArgumentException
      *             if an invalid chroot path is specified
+     *
+     * Session创建是异步的，该构造方法在发起与server的连接后将会直接返回，此时可能连接并未完全创建完成
+     * ZooKeeper客户端会从连接串挑选任意一个server来发起连接，如果失败了，将会重试连接其他server。从3.2.0版本添加了chroot，对所有的api操作，都会基于该路径
+     *
      */
     public ZooKeeper(String connectString, int sessionTimeout, Watcher watcher)
         throws IOException
@@ -440,13 +454,18 @@ public class ZooKeeper {
 
         watchManager.defaultWatcher = watcher;
 
+        //默认端口号2181
         ConnectStringParser connectStringParser = new ConnectStringParser(
                 connectString);
         HostProvider hostProvider = new StaticHostProvider(
                 connectStringParser.getServerAddresses());
+
+        //构建代表客户端连接的ClientCnxn
+        //getClientCnxnSocket()方法创建的是ClientCnxnSocketNIO对象
         cnxn = new ClientCnxn(connectStringParser.getChrootPath(),
                 hostProvider, sessionTimeout, this, watchManager,
                 getClientCnxnSocket(), canBeReadOnly);
+        //启动ClientCnxn
         cnxn.start();
     }
 

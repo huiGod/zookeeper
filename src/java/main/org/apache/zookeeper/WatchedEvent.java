@@ -28,8 +28,11 @@ import org.apache.zookeeper.Watcher.Event.KeeperState;
  *  was involved in the event.
  */
 public class WatchedEvent {
+    //状态变化类型
     final private KeeperState keeperState;
+    //事件类型
     final private EventType eventType;
+    //节点路径
     private String path;
     
     /**

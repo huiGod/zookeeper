@@ -43,6 +43,8 @@ import org.slf4j.LoggerFactory;
  * above the implementations 
  * of txnlog and snapshot 
  * classes
+ *
+ * 处理事物日志和快照文件
  */
 public class FileTxnSnapLog {
     //the direcotry containing the 
@@ -239,6 +241,7 @@ public class FileTxnSnapLog {
         File snapshotFile = new File(snapDir, Util.makeSnapshotName(lastZxid));
         LOG.info("Snapshotting: 0x{} to {}", Long.toHexString(lastZxid),
                 snapshotFile);
+        //将内存数据dataTree直接序列化写入磁盘文件
         snapLog.serialize(dataTree, sessionsWithTimeouts, snapshotFile);
         
     }

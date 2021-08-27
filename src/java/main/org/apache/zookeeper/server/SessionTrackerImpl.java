@@ -72,6 +72,7 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
         public boolean isClosing() { return isClosing; }
     }
 
+    //根据时间戳和sid初始化出当前server的sessionId起始值
     public static long initializeNextSession(long id) {
         long nextSid = 0;
         nextSid = (System.currentTimeMillis() << 24) >> 8;
@@ -98,7 +99,9 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
         this.expirer = expirer;
         this.expirationInterval = tickTime;
         this.sessionsWithTimeout = sessionsWithTimeout;
+        //通过expirationInterval计算出下一次需要执行过期逻辑的事件
         nextExpirationTime = roundToInterval(System.currentTimeMillis());
+        //初始化出起始sessionId
         this.nextSessionId = initializeNextSession(sid);
         for (Entry<Long, Integer> e : sessionsWithTimeout.entrySet()) {
             addSession(e.getKey(), e.getValue());
@@ -137,23 +140,33 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
         return sw.toString();
     }
 
+    /**
+     * 会话失效策略
+     */
     @Override
     synchronized public void run() {
         try {
             while (running) {
                 currentTime = System.currentTimeMillis();
                 if (nextExpirationTime > currentTime) {
+                    //等待时间到nextExpirationTime
                     this.wait(nextExpirationTime - currentTime);
                     continue;
                 }
                 SessionSet set;
+                //获取超时时间是nextExpirationTime的对应的sessionId
                 set = sessionSets.remove(nextExpirationTime);
                 if (set != null) {
                     for (SessionImpl s : set.sessions) {
+                        //将nextExpirationTime对应的session关闭
+                        //SessionImpl标识位关闭
                         setSessionClosing(s.sessionId);
+                        //进行closeSession的操作
+                        //给客户端发送closeSession请求关闭session连接
                         expirer.expire(s);
                     }
                 }
+                //更新下一次的对应的check的时间
                 nextExpirationTime += expirationInterval;
             }
         } catch (InterruptedException e) {
@@ -162,6 +175,12 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
         LOG.info("SessionTrackerImpl exited loop!");
     }
 
+    /**
+     * 延长对应的session的超时的时间
+     * @param sessionId
+     * @param timeout
+     * @return
+     */
     synchronized public boolean touchSession(long sessionId, int timeout) {
         if (LOG.isTraceEnabled()) {
             ZooTrace.logTraceMessage(LOG,
@@ -171,21 +190,28 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
         }
         SessionImpl s = sessionsById.get(sessionId);
         // Return false, if the session doesn't exists or marked as closing
+        //对应session已经被标识为关闭
         if (s == null || s.isClosing()) {
             return false;
         }
+        //超时时间
         long expireTime = roundToInterval(System.currentTimeMillis() + timeout);
+        //未过期不用处理
         if (s.tickTime >= expireTime) {
             // Nothing needs to be done
             return true;
         }
+        //如果已过期，则从sessionSets移除
         SessionSet set = sessionSets.get(s.tickTime);
         if (set != null) {
+            //移除原来位置的session
             set.sessions.remove(s);
         }
+        //保存至sessionSets中
         s.tickTime = expireTime;
         set = sessionSets.get(s.tickTime);
         if (set == null) {
+            //加入到新的session
             set = new SessionSet();
             sessionSets.put(expireTime, set);
         }
@@ -238,6 +264,7 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
     }
 
     synchronized public void addSession(long id, int sessionTimeout) {
+        //保存sessionId和超时时间
         sessionsWithTimeout.put(id, sessionTimeout);
         if (sessionsById.get(id) == null) {
             SessionImpl s = new SessionImpl(id, sessionTimeout, 0);
@@ -254,6 +281,7 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
                         + Long.toHexString(id) + " " + sessionTimeout);
             }
         }
+        //延长对应的session的超时的时间
         touchSession(id, sessionTimeout);
     }
 

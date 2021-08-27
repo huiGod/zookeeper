@@ -130,9 +130,11 @@ public class LearnerHandler extends Thread {
         long traceMask = ZooTrace.SERVER_PACKET_TRACE_MASK;
         while (true) {
             try {
+                //从queuedPackets队列获取需要发送给其他follower的数据
                 QuorumPacket p;
                 p = queuedPackets.poll();
                 if (p == null) {
+                    //调用底层IO流的flush刷出缓冲区数据
                     bufferedOutput.flush();
                     p = queuedPackets.take();
                 }
@@ -446,6 +448,7 @@ public class LearnerHandler extends Thread {
                     Thread.currentThread().setName(
                             "Sender-" + sock.getRemoteSocketAddress());
                     try {
+                        //单独线程处理需要发送给follower的数据
                         sendPackets();
                     } catch (InterruptedException e) {
                         LOG.warn("Unexpected interruption",e);
@@ -504,6 +507,7 @@ public class LearnerHandler extends Thread {
                 int type;
 
                 switch (qp.getType()) {
+                    //接收到ack消息类型
                 case Leader.ACK:
                     if (this.learnerType == LearnerType.OBSERVER) {
                         if (LOG.isDebugEnabled()) {

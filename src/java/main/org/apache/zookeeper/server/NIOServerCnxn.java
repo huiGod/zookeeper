@@ -183,6 +183,7 @@ public class NIOServerCnxn extends ServerCnxn {
 
     /** Read the request payload (everything following the length prefix) */
     private void readPayload() throws IOException, InterruptedException {
+        //发生拆包与粘包incomingBuffer未读满，继续读
         if (incomingBuffer.remaining() != 0) { // have we read length bytes?
             int rc = sock.read(incomingBuffer); // sock is non-blocking, so ok
             if (rc < 0) {
@@ -193,12 +194,15 @@ public class NIOServerCnxn extends ServerCnxn {
             }
         }
 
+        //完整数据读取完成
         if (incomingBuffer.remaining() == 0) { // have we read length bytes?
             packetReceived();
             incomingBuffer.flip();
+            //如果连接是刚创建完成，接收到的第一个请求会是ConnectRequest，特殊处理
             if (!initialized) {
                 readConnectRequest();
             } else {
+                //非ConnectRequest处理逻辑
                 readRequest();
             }
             lenBuffer.clear();
@@ -214,7 +218,9 @@ public class NIOServerCnxn extends ServerCnxn {
 
                 return;
             }
+            //处理可读事件
             if (k.isReadable()) {
+                //首先读取4个字节
                 int rc = sock.read(incomingBuffer);
                 if (rc < 0) {
                     throw new EndOfStreamException(
@@ -222,10 +228,12 @@ public class NIOServerCnxn extends ServerCnxn {
                             + Long.toHexString(sessionId)
                             + ", likely client has closed socket");
                 }
+                //读取到完整4个字节
                 if (incomingBuffer.remaining() == 0) {
                     boolean isPayload;
                     if (incomingBuffer == lenBuffer) { // start of next request
                         incomingBuffer.flip();
+                        //读取4个字节的int长度，并初始化为incomingBuffer的长度共后续读取
                         isPayload = readLength(k);
                         incomingBuffer.clear();
                     } else {
@@ -233,6 +241,7 @@ public class NIOServerCnxn extends ServerCnxn {
                         isPayload = true;
                     }
                     if (isPayload) { // not the case for 4letterword
+                        //读取接收到的请求数据
                         readPayload();
                     }
                     else {
@@ -242,6 +251,8 @@ public class NIOServerCnxn extends ServerCnxn {
                     }
                 }
             }
+            //处理可写事件
+            //处理的拆包粘包，另一种经典方式
             if (k.isWritable()) {
                 // ZooLog.logTraceMessage(LOG,
                 // ZooLog.CLIENT_DATA_PACKET_TRACE_MASK
@@ -259,10 +270,13 @@ public class NIOServerCnxn extends ServerCnxn {
                      * with data from the non-direct buffers that we need to
                      * send.
                      */
+                    //使用堆外内存提升性能，每满64K才进行后续网络发送
                     ByteBuffer directBuffer = factory.directBuffer;
                     directBuffer.clear();
 
+                    //directBuffer大小是64K
                     for (ByteBuffer b : outgoingBuffers) {
+                        //如果directBuffer小于outgoingBuffers队列中需要发送的数据，则进行数据分割
                         if (directBuffer.remaining() < b.remaining()) {
                             /*
                              * When we call put later, if the directBuffer is to
@@ -279,9 +293,11 @@ public class NIOServerCnxn extends ServerCnxn {
                          * needed), so we save and reset the position after the
                          * copy
                          */
+                        //如果directBuffer大于outgoingBuffers队列中需要发送的数据，则直接将队列中数据放入到directBuffer
                         int p = b.position();
                         directBuffer.put(b);
                         b.position(p);
+                        //如果directBuffer空间被写满了则停止循环进行后续数据发送
                         if (directBuffer.remaining() == 0) {
                             break;
                         }
@@ -292,27 +308,34 @@ public class NIOServerCnxn extends ServerCnxn {
                      */
                     directBuffer.flip();
 
+                    //直接将directBuffer通过网络IO发送出去
                     int sent = sock.write(directBuffer);
                     ByteBuffer bb;
 
                     // Remove the buffers that we have sent
+                    //前面发送的只是directBuffer,outgoingBuffers队列中的数据不会有变化
                     while (outgoingBuffers.size() > 0) {
                         bb = outgoingBuffers.peek();
                         if (bb == ServerCnxnFactory.closeConn) {
                             throw new CloseRequestException("close requested");
                         }
                         int left = bb.remaining() - sent;
+                        //left>0表示outgoingBuffers队列中第一个ByteBuffer还没有发送完成
                         if (left > 0) {
                             /*
                              * We only partially sent this buffer, so we update
                              * the position and exit the loop.
                              */
+                            //定位到已经发送到的位置
+                            //后续继续发送
                             bb.position(bb.position() + sent);
                             break;
                         }
+                        //left ==0 表示全部发送完成
                         packetSent();
                         /* We've sent the whole buffer, so drop the buffer */
                         sent -= bb.remaining();
+                        //从outgoingBuffers队列中移除第一个已经发送完成的ByteBuffer
                         outgoingBuffers.remove();
                     }
                     // ZooLog.logTraceMessage(LOG,
@@ -320,6 +343,7 @@ public class NIOServerCnxn extends ServerCnxn {
                     // outgoingBuffers.size() = " + outgoingBuffers.size());
                 }
 
+                //查看outgoingBuffers队列是否已经发送完成，并且确定是否继续关注OP_WRITE事件
                 synchronized(this.factory){
                     if (outgoingBuffers.size() == 0) {
                         if (!initialized
@@ -918,6 +942,7 @@ public class NIOServerCnxn extends ServerCnxn {
         if (!initialized && checkFourLetterWord(sk, len)) {
             return false;
         }
+        //网络传输最大数据限制
         if (len < 0 || len > BinaryInputArchive.maxBuffer) {
             throw new IOException("Len error " + len);
         }

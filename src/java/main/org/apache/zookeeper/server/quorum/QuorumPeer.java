@@ -410,6 +410,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
         //从磁盘加载数据文件到内存
         loadDataBase();
 
+        //启动服务端NIOServerCnxnFactory线程
         cnxnFactory.start();
 
         //初始化 leader 选举算法

@@ -290,6 +290,7 @@ public class ClientCnxn {
                 }
                 baos.close();
                 this.bb = ByteBuffer.wrap(baos.toByteArray());
+                //前面已经将-1写进去了，这里覆盖真实长度即可
                 this.bb.putInt(this.bb.capacity() - 4);
                 this.bb.rewind();
             } catch (IOException e) {
@@ -620,9 +621,11 @@ public class ClientCnxn {
         if (p.cb == null) {
             synchronized (p) {
                 p.finished = true;
+                //
                 p.notifyAll();
             }
         } else {
+            //如果有回调则触发
             p.finished = true;
             eventThread.queuePacket(p);
         }
@@ -701,6 +704,7 @@ public class ClientCnxn {
         private Random r = new Random(System.nanoTime());        
         private boolean isFirstConnect = true;
 
+        //解析读取的请求
         void readResponse(ByteBuffer incomingBuffer) throws IOException {
             ByteBufferInputStream bbis = new ByteBufferInputStream(
                     incomingBuffer);
@@ -776,6 +780,7 @@ public class ClientCnxn {
                 return;
             }
 
+            //接收到的响应数据一定对应的是pendingQueue队列队头
             Packet packet;
             synchronized (pendingQueue) {
                 if (pendingQueue.size() == 0) {
@@ -808,6 +813,7 @@ public class ClientCnxn {
                     lastZxid = replyHdr.getZxid();
                 }
                 if (packet.response != null && replyHdr.getErr() == 0) {
+                    //序列化解析请求
                     packet.response.deserialize(bbia, "response");
                 }
 
@@ -816,6 +822,7 @@ public class ClientCnxn {
                             + Long.toHexString(sessionId) + ", packet:: " + packet);
                 }
             } finally {
+                //读取完数据包后的处理
                 finishPacket(packet);
             }
         }
@@ -845,6 +852,11 @@ public class ClientCnxn {
             return clientCnxnSocket;
         }
 
+        /**
+         * 建立连接后发送ConnectRequest数据包和认证数据
+         * 并且开始关注OP_READ和OP_WRITE事件
+         * @throws IOException
+         */
         void primeConnection() throws IOException {
             LOG.info("Socket connection established to "
                      + clientCnxnSocket.getRemoteSocketAddress()
@@ -876,14 +888,17 @@ public class ClientCnxn {
                     }
                 }
 
+                //添加认证信息到队列
                 for (AuthData id : authInfo) {
                     outgoingQueue.addFirst(new Packet(new RequestHeader(-4,
                             OpCode.auth), null, new AuthPacket(0, id.scheme,
                             id.data), null, null));
                 }
+                //发送conReq数据包
                 outgoingQueue.addFirst(new Packet(null, null, conReq,
                             null, null, readOnly));
             }
+            //关注读和写事件
             clientCnxnSocket.enableReadWriteOnly();
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Session establishment request sent on "
@@ -953,8 +968,10 @@ public class ClientCnxn {
                   Watcher.Event.KeeperState.AuthFailed, null));
                 saslLoginFailed = true;
             }
+
             logStartConnect(addr);
 
+            //创建连接
             clientCnxnSocket.connect(addr);
         }
 
@@ -971,8 +988,11 @@ public class ClientCnxn {
         
         @Override
         public void run() {
+            //绑定sendThread和sessionId
             clientCnxnSocket.introduce(this,sessionId);
+            //更新时间
             clientCnxnSocket.updateNow();
+            //更新最近发送消息时间
             clientCnxnSocket.updateLastSendAndHeard();
             int to;
             long lastPingRwServer = System.currentTimeMillis();
@@ -990,7 +1010,9 @@ public class ClientCnxn {
                         if (closing || !state.isAlive()) {
                             break;
                         }
+                        //创建与server的连接
                         startConnect();
+                        //再次更新最近发送消息时间
                         clientCnxnSocket.updateLastSendAndHeard();
                     }
 
@@ -1026,12 +1048,16 @@ public class ClientCnxn {
                                       authState,null));
                             }
                         }
+                        //readTimeout = sessionTimeout * 2 / 3
+                        //如果连接已经创建用readTimeout来计算超时时间
                         to = readTimeout - clientCnxnSocket.getIdleRecv();
                     } else {
+                        //否则用连接时间connectTimeout来计算超时时间
                         to = connectTimeout - clientCnxnSocket.getIdleRecv();
                     }
                     
                     if (to <= 0) {
+                        //session超时报错
                         throw new SessionTimeoutException(
                                 "Client session timed out, have not heard from server in "
                                         + clientCnxnSocket.getIdleRecv() + "ms"
@@ -1039,10 +1065,13 @@ public class ClientCnxn {
                                         + Long.toHexString(sessionId));
                     }
                     if (state.isConnected()) {
+                        //达到超时时间的一半就需要发送心跳
                         int timeToNextPing = readTimeout / 2
                                 - clientCnxnSocket.getIdleSend();
                         if (timeToNextPing <= 0) {
+                            //发送心跳
                             sendPing();
+                            //更新连接的lastSend
                             clientCnxnSocket.updateLastSend();
                         } else {
                             if (timeToNextPing < to) {
@@ -1065,6 +1094,7 @@ public class ClientCnxn {
                         to = Math.min(to, pingRwTimeout - idlePingRwServer);
                     }
 
+                    //执行IO事件
                     clientCnxnSocket.doTransport(to, pendingQueue, outgoingQueue, ClientCnxn.this);
                 } catch (Throwable e) {
                     if (closing) {
@@ -1106,7 +1136,9 @@ public class ClientCnxn {
                     }
                 }
             }
+            //关闭后的资源清理
             cleanup();
+            //客户端连接关闭
             clientCnxnSocket.close();
             if (state.isAlive()) {
                 eventThread.queueEvent(new WatchedEvent(Event.EventType.None,

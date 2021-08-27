@@ -57,6 +57,7 @@ public class LeaderZooKeeperServer extends QuorumZooKeeperServer {
     }
     
     @Override
+    //不同的server角色，处理链路不同
     protected void setupRequestProcessors() {
         RequestProcessor finalProcessor = new FinalRequestProcessor(this);
         RequestProcessor toBeAppliedProcessor = new Leader.ToBeAppliedRequestProcessor(

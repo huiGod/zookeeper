@@ -32,6 +32,8 @@ import org.slf4j.LoggerFactory;
  * This RequestProcessor logs requests to disk. It batches the requests to do
  * the io efficiently. The request is not passed to the next RequestProcessor
  * until its log has been synced to disk.
+ *
+ * 将请求持久化到磁盘，并且直到请求数据同步到磁盘后才会让后续RequestProcessor处理
  */
 public class SyncRequestProcessor extends Thread implements RequestProcessor {
     private static final Logger LOG = LoggerFactory.getLogger(SyncRequestProcessor.class);
@@ -47,6 +49,8 @@ public class SyncRequestProcessor extends Thread implements RequestProcessor {
      * Transactions that have been written and are waiting to be flushed to
      * disk. Basically this is the list of SyncItems whose callbacks will be
      * invoked after flush returns successfully.
+     *
+     * 等待被flush到磁盘的事物请求
      */
     private final LinkedList<Request> toFlush = new LinkedList<Request>();
     private final Random r = new Random(System.nanoTime());
@@ -93,9 +97,11 @@ public class SyncRequestProcessor extends Thread implements RequestProcessor {
             int randRoll = r.nextInt(snapCount/2);
             while (true) {
                 Request si = null;
+                //如果待flush的请求为空，则阻塞获取queuedRequests队列数据
                 if (toFlush.isEmpty()) {
                     si = queuedRequests.take();
                 } else {
+                    //否则当queuedRequests没有数据就执行flush刷盘操作
                     si = queuedRequests.poll();
                     if (si == null) {
                         flush(toFlush);
@@ -107,6 +113,7 @@ public class SyncRequestProcessor extends Thread implements RequestProcessor {
                 }
                 if (si != null) {
                     // track the number of records written to the log
+                    //请求数据追加到快照日志文件
                     if (zks.getZKDatabase().append(si)) {
                         logCount++;
                         if (logCount > (snapCount / 2 + randRoll)) {
@@ -120,6 +127,7 @@ public class SyncRequestProcessor extends Thread implements RequestProcessor {
                                 snapInProcess = new Thread("Snapshot Thread") {
                                         public void run() {
                                             try {
+                                                //开启新的线程生成快照文件
                                                 zks.takeSnapshot();
                                             } catch(Exception e) {
                                                 LOG.warn("Unexpected exception", e);
@@ -161,6 +169,7 @@ public class SyncRequestProcessor extends Thread implements RequestProcessor {
         if (toFlush.isEmpty())
             return;
 
+        //事物快照日志刷盘
         zks.getZKDatabase().commit();
         while (!toFlush.isEmpty()) {
             Request i = toFlush.remove();

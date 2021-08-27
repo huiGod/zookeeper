@@ -108,6 +108,7 @@ abstract class ClientCnxnSocket {
 
     protected void readLength() throws IOException {
         int len = incomingBuffer.getInt();
+        //读取的数据大于4M则抛错
         if (len < 0 || len >= ClientCnxn.packetLen) {
             throw new IOException("Packet len" + len + " is out of range!");
         }
@@ -124,6 +125,7 @@ abstract class ClientCnxnSocket {
             LOG.trace("readConnectResult " + incomingBuffer.remaining() + " "
                     + buf.toString());
         }
+        //读取到的数据进行反序列化
         ByteBufferInputStream bbis = new ByteBufferInputStream(incomingBuffer);
         BinaryInputArchive bbia = BinaryInputArchive.getArchive(bbis);
         ConnectResponse conRsp = new ConnectResponse();
@@ -139,7 +141,9 @@ abstract class ClientCnxnSocket {
             LOG.warn("Connected to an old server; r-o mode will be unavailable");
         }
 
+        //客户端的sessionId是服务端返回的
         this.sessionId = conRsp.getSessionId();
+        //第一次连接成功后执行一些回调
         sendThread.onConnected(conRsp.getTimeOut(), this.sessionId,
                 conRsp.getPasswd(), isRO);
     }

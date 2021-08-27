@@ -138,7 +138,9 @@ public class QuorumPeerMain {
 
       LOG.info("Starting quorum peer");
       try {
+          //默认创建的是NIOServerCnxnFactory用来接收客户端的连接
           ServerCnxnFactory cnxnFactory = ServerCnxnFactory.createFactory();
+          //配置server监听的ip与端口号，默认2181
           cnxnFactory.configure(config.getClientPortAddress(),
                                 config.getMaxClientCnxns());
 

@@ -55,6 +55,9 @@ import org.apache.zookeeper.txn.TxnHeader;
  * server states that includes the sessions, datatree and the
  * committed logs. It is booted up  after reading the logs
  * and snapshots from the disk.
+ *
+ * 内存数据库，包括session数据、内存元数据、事物日志
+ * 可以启动的时候从磁盘读取日志和快照文件
  */
 public class ZKDatabase {
     
@@ -64,8 +67,10 @@ public class ZKDatabase {
      * make sure on a clear you take care of 
      * all these members.
      */
+    //内存数据库，存放树形数据结构
     protected DataTree dataTree;
     protected ConcurrentHashMap<Long, Integer> sessionsWithTimeouts;
+    //事物日志、快照文件处理组件
     protected FileTxnSnapLog snapLog;
     protected long minCommittedLog, maxCommittedLog;
     public static final int commitLogCount = 500;

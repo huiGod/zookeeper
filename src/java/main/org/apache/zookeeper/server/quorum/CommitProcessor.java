@@ -75,8 +75,15 @@ public class CommitProcessor extends Thread implements RequestProcessor {
                 }
                 toProcess.clear();
                 synchronized (this) {
+
+                    //客户端可能发送很多消息过来，都会在queuedRequests中排队，一个一个请求一次去进行2pc处理
+
+                    //没有请求到queuedRequests队列则阻塞
+                    //nextPending表示正在处理的请求
+                    //等待消息处理完2pc流程后，加入到committedRequests队列，并且在这里唤醒
                     if ((queuedRequests.size() == 0 || nextPending != null)
                             && committedRequests.size() == 0) {
+                        //从queuedRequests队列获取到数据赋值给nextPending后，在这里仍然会阻塞等待
                         wait();
                         continue;
                     }
@@ -117,6 +124,7 @@ public class CommitProcessor extends Thread implements RequestProcessor {
 
                 synchronized (this) {
                     // Process the next requests in the queuedRequests
+                    //处理queuedRequests队列数据
                     while (nextPending == null && queuedRequests.size() > 0) {
                         Request request = queuedRequests.remove();
                         switch (request.type) {
@@ -172,6 +180,7 @@ public class CommitProcessor extends Thread implements RequestProcessor {
         }
         
         if (!finished) {
+            //有请求需要处理，唤醒当前线程
             queuedRequests.add(request);
             notifyAll();
         }

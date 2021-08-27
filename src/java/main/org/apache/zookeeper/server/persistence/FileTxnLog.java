@@ -183,7 +183,9 @@ public class FileTxnLog implements TxnLog {
      * append an entry to the transaction log
      * @param hdr the header of the transaction
      * @param txn the transaction part of the entry
-     * returns true iff something appended, otw false 
+     * returns true iff something appended, otw false
+     *
+     * 追加事物日志到快照文件
      */
     public synchronized boolean append(TxnHeader hdr, Record txn)
         throws IOException
@@ -220,6 +222,7 @@ public class FileTxnLog implements TxnLog {
             }
             Checksum crc = makeChecksumAlgorithm();
             crc.update(buf, 0, buf.length);
+            //写入checksum和数据
             oa.writeLong(crc.getValue(), "txnEntryCRC");
             Util.writeTxnBytes(oa, buf);
             

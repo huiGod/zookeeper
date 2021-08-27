@@ -128,6 +128,7 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
                 if (Request.requestOfDeath == request) {
                     break;
                 }
+                //根据请求类型执行不同处理逻辑
                 pRequest(request);
             }
         } catch (InterruptedException e) {
@@ -307,12 +308,14 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
                                     zks.getTime(), type);
 
         switch (type) {
-            case OpCode.create:                
+            case OpCode.create:
+                //校验session有效性
                 zks.sessionTracker.checkSession(request.sessionId, request.getOwner());
                 CreateRequest createRequest = (CreateRequest)record;   
                 if(deserialize)
                     ByteBufferInputStream.byteBuffer2Record(request.request, createRequest);
                 String path = createRequest.getPath();
+                //请求path路径必需包含/
                 int lastSlash = path.lastIndexOf('/');
                 if (lastSlash == -1 || path.indexOf('\0') != -1 || failCreate) {
                     LOG.info("Invalid path " + path + " with session 0x" +
@@ -332,6 +335,7 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
                 CreateMode createMode =
                     CreateMode.fromFlag(createRequest.getFlags());
                 if (createMode.isSequential()) {
+                    //如果是创建有序节点，则在path后面加上版本号
                     path = path + String.format(Locale.ENGLISH, "%010d", parentCVersion);
                 }
                 try {
@@ -363,6 +367,7 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
                 parentRecord = parentRecord.duplicate(request.hdr.getZxid());
                 parentRecord.childCount++;
                 parentRecord.stat.setCversion(newCversion);
+                //数据加入队列
                 addChangeRecord(parentRecord);
                 addChangeRecord(new ChangeRecord(request.hdr.getZxid(), path, s,
                         0, listACL));

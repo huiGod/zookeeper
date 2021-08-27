@@ -88,12 +88,16 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
 
         thread = new Thread(this, "NIOServerCxn.Factory:" + addr);
         thread.setDaemon(true);
+        //默认客户端连接数最大为64
         maxClientCnxns = maxcc;
+        //创建ServerSocketChannel
         this.ss = ServerSocketChannel.open();
         ss.socket().setReuseAddress(true);
         LOG.info("binding to port " + addr);
         ss.socket().bind(addr);
+        //配置NIO非阻塞
         ss.configureBlocking(false);
+        //注册到Selector上，并关注accept事件
         ss.register(selector, SelectionKey.OP_ACCEPT);
     }
 
@@ -136,7 +140,9 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
 
     private void addCnxn(NIOServerCnxn cnxn) {
         synchronized (cnxns) {
+            //添加到全局cnxns集合中维护
             cnxns.add(cnxn);
+            //添加到ipMap集合来控制客户端连接数
             synchronized (ipMap){
                 InetAddress addr = cnxn.sock.socket().getInetAddress();
                 Set<NIOServerCnxn> s = ipMap.get(addr);
@@ -175,6 +181,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
     public void run() {
         while (!ss.socket().isClosed()) {
             try {
+                //多路复用器都会有一个超时时间
                 selector.select(1000);
                 Set<SelectionKey> selected;
                 synchronized (this) {
@@ -182,13 +189,17 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
                 }
                 ArrayList<SelectionKey> selectedList = new ArrayList<SelectionKey>(
                         selected);
+                //随机打散，避免总是先处理某个连接的请求
                 Collections.shuffle(selectedList);
                 for (SelectionKey k : selectedList) {
+                    //处理accept事件请求
                     if ((k.readyOps() & SelectionKey.OP_ACCEPT) != 0) {
+                        //创建客户端SocketChannel
                         SocketChannel sc = ((ServerSocketChannel) k
                                 .channel()).accept();
                         InetAddress ia = sc.socket().getInetAddress();
                         int cnxncount = getClientCnxnCount(ia);
+                        //如果客户端连接数大于了maxClientCnxns，则关闭连接
                         if (maxClientCnxns > 0 && cnxncount >= maxClientCnxns){
                             LOG.warn("Too many connections from " + ia
                                      + " - max is " + maxClientCnxns );
@@ -196,14 +207,20 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
                         } else {
                             LOG.info("Accepted socket connection from "
                                      + sc.socket().getRemoteSocketAddress());
+                            //否则配置客户端SocketChannel
                             sc.configureBlocking(false);
+                            //将客户端SocketChannel注册到Selector上，并关注OP_READ事件
                             SelectionKey sk = sc.register(selector,
                                     SelectionKey.OP_READ);
+                            //封装为NIOServerCnxn
                             NIOServerCnxn cnxn = createConnection(sc, sk);
+                            //后续有事件触发了可以获取到这里的NIOServerCnxn
                             sk.attach(cnxn);
+                            //维护全局NIOServerCnxn
                             addCnxn(cnxn);
                         }
                     } else if ((k.readyOps() & (SelectionKey.OP_READ | SelectionKey.OP_WRITE)) != 0) {
+                        //如果有读写事件就绪，则通过NIOServerCnxn来处理具体IO逻辑
                         NIOServerCnxn c = (NIOServerCnxn) k.attachment();
                         c.doIO(k);
                     } else {

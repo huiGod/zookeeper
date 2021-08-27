@@ -57,6 +57,8 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
      * @return true if a packet was received
      * @throws InterruptedException
      * @throws IOException
+     *
+     * 有任何异常直接抛出最终会关闭该连接
      */
     void doIO(List<Packet> pendingQueue, LinkedList<Packet> outgoingQueue, ClientCnxn cnxn)
       throws InterruptedException, IOException {
@@ -64,7 +66,15 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
         if (sock == null) {
             throw new IOException("Socket is null!");
         }
+        //处理读IO
+        //1.首先初始化incomingBuffer为4个字节，并从socket读取数据，直到读取到4个字节
+        //2.将读取到的4个字节转换成int类型，代表后续需要读取的数据的长度，并初始化为incomingBuffer的长度
+        //3.继续从socket读取数据，直到读取上述int长度数据为止，也就是incomingBuffer不为空
+        //4.在对服务端成功创建连接后，会发送ConnectRequest请求，并且initialized是false
+        //5.这里socket第一次会执行else if逻辑，读取ConnectResponse响应数据，来设置当前客户端sessionId
+        //6.后续接收到数据后，会从pendingQueue中移除待响应数据
         if (sockKey.isReadable()) {
+            //先读取4个字节
             int rc = sock.read(incomingBuffer);
             if (rc < 0) {
                 throw new EndOfStreamException(
@@ -72,14 +82,23 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                                 + Long.toHexString(sessionId)
                                 + ", likely server has closed socket");
             }
+            //如果没有读取到4个字节，不用处理，下一次select会继续来读取
+            //并且incomingBuffer没有被清空，会继续读满4个字节
             if (!incomingBuffer.hasRemaining()) {
                 incomingBuffer.flip();
+                //第1次读取4个字节，这里条件满足
+                //第2次incomingBuffer被初始化为上述4个字节长度的ByteBuffer，这里条件就不会满足
                 if (incomingBuffer == lenBuffer) {
                     recvCount++;
+                    //读取到字节长度后，重新初始化了incomingBuffer
                     readLength();
                 } else if (!initialized) {
+                    //initialized默认为false
+                    //读取服务端响应数据ConnectResponse，设置当前客户端sessionId并且触发event事件
                     readConnectResult();
+                    //如果没有关注OP_READ则继续关注
                     enableRead();
+                    //如果有数据需要发送则并且没有关注OP_WRITE则关注OP_WRITE
                     if (findSendablePacket(outgoingQueue,
                             cnxn.sendThread.clientTunneledAuthenticationInProgress()) != null) {
                         // Since SASL authentication has completed (if client is configured to do so),
@@ -89,21 +108,28 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                     lenBuffer.clear();
                     incomingBuffer = lenBuffer;
                     updateLastHeard();
+                    //修改标识，只会再第一次执行该else if逻辑
                     initialized = true;
                 } else {
+                    //再第一次读取完ConnectResponse后，后续读取数据逻辑都是这里
                     sendThread.readResponse(incomingBuffer);
+                    //重置缓冲区
                     lenBuffer.clear();
                     incomingBuffer = lenBuffer;
+                    //更新最近接收时间
                     updateLastHeard();
                 }
             }
         }
+        //处理写IO
         if (sockKey.isWritable()) {
             synchronized(outgoingQueue) {
+                //获取队列需要发送的数据包
                 Packet p = findSendablePacket(outgoingQueue,
                         cnxn.sendThread.clientTunneledAuthenticationInProgress());
 
                 if (p != null) {
+                    //更新最近发送时间
                     updateLastSend();
                     // If we already started writing p, p.bb will already exist
                     if (p.bb == null) {
@@ -112,10 +138,14 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                                 (p.requestHeader.getType() != OpCode.auth)) {
                             p.requestHeader.setXid(cnxn.getXid());
                         }
+                        //序列化需要发送的数据，并且添加header长度
                         p.createBB();
                     }
+                    //将数据通过socket发送出去
+                    //如果发生粘包拆包继续发送
                     sock.write(p.bb);
                     if (!p.bb.hasRemaining()) {
+                        //如果发送完成，则从outgoingQueue队列移除，并且添加到pendingQueue队列中
                         sentCount++;
                         outgoingQueue.removeFirstOccurrence(p);
                         if (p.requestHeader != null
@@ -127,6 +157,7 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                         }
                     }
                 }
+                //如果outgoingQueue还有数据包需要发送则继续关注OP_WRITE事件
                 if (outgoingQueue.isEmpty()) {
                     // No more packets to send: turn off write interest flag.
                     // Will be turned on later by a later call to enableWrite(),
@@ -262,7 +293,9 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
      */
     void registerAndConnect(SocketChannel sock, InetSocketAddress addr) 
     throws IOException {
+        //注册并关注OP_CONNECT事件
         sockKey = sock.register(selector, SelectionKey.OP_CONNECT);
+        //直接发起连接，因为是异步非阻塞，可能会返回false
         boolean immediateConnect = sock.connect(addr);
         if (immediateConnect) {
             sendThread.primeConnection();
@@ -271,8 +304,10 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
     
     @Override
     void connect(InetSocketAddress addr) throws IOException {
+        //创建SocketChannel
         SocketChannel sock = createSock();
         try {
+            //注册并发起连接
            registerAndConnect(sock, addr);
         } catch (IOException e) {
             LOG.error("Unable to open socket to " + addr);
@@ -335,6 +370,7 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
     void doTransport(int waitTimeOut, List<Packet> pendingQueue, LinkedList<Packet> outgoingQueue,
                      ClientCnxn cnxn)
             throws IOException, InterruptedException {
+        //获取准备就绪事件
         selector.select(waitTimeOut);
         Set<SelectionKey> selected;
         synchronized (this) {
@@ -347,11 +383,15 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
         for (SelectionKey k : selected) {
             SocketChannel sc = ((SocketChannel) k.channel());
             if ((k.readyOps() & SelectionKey.OP_CONNECT) != 0) {
+                //处理连接成功事件
                 if (sc.finishConnect()) {
+                    //更新最新有效时间
                     updateLastSendAndHeard();
+                    //发送ConnectRequest消息
                     sendThread.primeConnection();
                 }
             } else if ((k.readyOps() & (SelectionKey.OP_READ | SelectionKey.OP_WRITE)) != 0) {
+                //处理读写事件
                 doIO(pendingQueue, outgoingQueue, cnxn);
             }
         }

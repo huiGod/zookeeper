@@ -284,8 +284,10 @@ public class Leader {
      */
     final static int INFORM = 8;
 
+    //保存leader发送给follower的消息
     ConcurrentMap<Long, Proposal> outstandingProposals = new ConcurrentHashMap<Long, Proposal>();
 
+    //保存接收到ack数超过大多数follower的消息
     ConcurrentLinkedQueue<Proposal> toBeApplied = new ConcurrentLinkedQueue<Proposal>();
 
     Proposal newLeaderProposal = new Proposal();
@@ -391,6 +393,8 @@ public class Leader {
             // We have to get at least a majority of servers in sync with
             // us. We do this by waiting for the NEWLEADER packet to get
             // acknowledged
+
+            //刚开始投票出leader后，等待大多数follower完成数据同步
             while (!self.getQuorumVerifier().containsQuorum(newLeaderProposal.ackSet)){
             //while (newLeaderProposal.ackCount <= self.quorumPeers.size() / 2) {
                 if (self.tick > self.initLimit) {
@@ -536,6 +540,10 @@ public class Leader {
      * @param zxid
      *                the zxid of the proposal sent out
      * @param followerAddr
+     *
+     *
+     * 之前leader发送给其他follower的消息放在leader全局的outstandingProposals map中保存
+     * 这里接收到follower返回的ack后，进行计算大多数响应逻辑
      */
     synchronized public void processAck(long sid, long zxid, SocketAddress followerAddr) {
         if (LOG.isTraceEnabled()) {
@@ -547,7 +555,8 @@ public class Leader {
             }
             LOG.trace("outstanding proposals all");
         }
-        
+
+        //outstandingProposals保存了之前leader发送给follower的消息
         if (outstandingProposals.size() == 0) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("outstanding is 0");
@@ -562,24 +571,28 @@ public class Leader {
             // The proposal has already been committed
             return;
         }
+        //获取发送给follower的消息
         Proposal p = outstandingProposals.get(zxid);
         if (p == null) {
             LOG.warn("Trying to commit future proposal: zxid 0x{} from {}",
                     Long.toHexString(zxid), followerAddr);
             return;
         }
-        
+
+        //通过消息本身ackSet来存储哪个follower发送过ack
         p.ackSet.add(sid);
         if (LOG.isDebugEnabled()) {
             LOG.debug("Count for zxid: 0x{} is {}",
                     Long.toHexString(zxid), p.ackSet.size());
         }
+        //验证接收到ack的follower数量是否超过了follower的一半（大多数）
         if (self.getQuorumVerifier().containsQuorum(p.ackSet)){             
             if (zxid != lastCommitted+1) {
                 LOG.warn("Commiting zxid 0x{} from {} not first!",
                         Long.toHexString(zxid), followerAddr);
                 LOG.warn("First is 0x{}", Long.toHexString(lastCommitted + 1));
             }
+            //接收到大多数ack后从outstandingProposals中移除，加入到toBeApplied队列
             outstandingProposals.remove(zxid);
             if (p.request != null) {
                 toBeApplied.add(p);
@@ -589,8 +602,12 @@ public class Leader {
                 if (p.request == null) {
                     LOG.warn("Going to commmit null request for proposal: {}", p);
                 }
+                //开始commit消息，将消息发送给其他所有follower
                 commit(zxid);
+
+                //发送INFORM到Observer
                 inform(p);
+
                 zk.commitProcessor.commit(p.request);
                 if(pendingSyncs.containsKey(zxid)){
                     for(LearnerSyncRequest r: pendingSyncs.remove(zxid)) {
@@ -602,7 +619,9 @@ public class Leader {
                 lastCommitted = zxid;
                 LOG.info("Have quorum of supporters; starting up and setting last processed zxid: 0x{}",
                         Long.toHexString(zk.getZxid()));
+                //这里很关键，如果是新的leader消息，需要开启session过期线程以及设置好消息处理链路
                 zk.startup();
+                //更新内存元数据zxid
                 zk.getZKDatabase().setlastProcessedZxid(zk.getZxid());
             }
         }
@@ -670,7 +689,8 @@ public class Leader {
      */
     void sendPacket(QuorumPacket qp) {
         synchronized (forwardingFollowers) {
-            for (LearnerHandler f : forwardingFollowers) {                
+            for (LearnerHandler f : forwardingFollowers) {
+                //放入队列
                 f.queuePacket(qp);
             }
         }
@@ -697,6 +717,7 @@ public class Leader {
             lastCommitted = zxid;
         }
         QuorumPacket qp = new QuorumPacket(Leader.COMMIT, zxid, null, null);
+        //再次发送COMMIT消息给follower
         sendPacket(qp);
     }
     
@@ -735,6 +756,8 @@ public class Leader {
      * 
      * @param request
      * @return the proposal that is queued to send to all the members
+     *
+     * 创建事物消息并发送给所有follower
      */
     public Proposal propose(Request request) throws XidRolloverException {
         /**
@@ -771,7 +794,9 @@ public class Leader {
             }
 
             lastProposed = p.packet.getZxid();
+            //将进行2pc需要同步的消息入outstandingProposals队列，后续接收到大多数ack响应后，从这里来获取对应的消息
             outstandingProposals.put(lastProposed, p);
+            //发送给所有的follower
             sendPacket(pp);
         }
         return p;
