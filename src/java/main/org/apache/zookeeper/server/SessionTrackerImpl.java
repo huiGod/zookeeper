@@ -42,10 +42,13 @@ import org.apache.zookeeper.KeeperException.SessionExpiredException;
 public class SessionTrackerImpl extends Thread implements SessionTracker {
     private static final Logger LOG = LoggerFactory.getLogger(SessionTrackerImpl.class);
 
+    //sessionId对应session
     HashMap<Long, SessionImpl> sessionsById = new HashMap<Long, SessionImpl>();
 
+    //每个过期时间（桶）下的所有session集合
     HashMap<Long, SessionSet> sessionSets = new HashMap<Long, SessionSet>();
 
+    //sessionId对应过期时间
     ConcurrentHashMap<Long, Integer> sessionsWithTimeout;
     long nextSessionId = 0;
     long nextExpirationTime;
@@ -194,7 +197,7 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
         if (s == null || s.isClosing()) {
             return false;
         }
-        //超时时间
+        //计算刚好大于超时时间的整倍数expirationInterval
         long expireTime = roundToInterval(System.currentTimeMillis() + timeout);
         //未过期不用处理
         if (s.tickTime >= expireTime) {
@@ -259,7 +262,9 @@ public class SessionTrackerImpl extends Thread implements SessionTracker {
 
 
     synchronized public long createSession(int sessionTimeout) {
+        //将session添加到session管理器中
         addSession(nextSessionId, sessionTimeout);
+        //返回唯一sessionId
         return nextSessionId++;
     }
 

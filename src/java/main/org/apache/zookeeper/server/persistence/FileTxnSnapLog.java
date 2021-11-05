@@ -49,11 +49,15 @@ import org.slf4j.LoggerFactory;
 public class FileTxnSnapLog {
     //the direcotry containing the 
     //the transaction logs
+    //事物日志目录
     private final File dataDir;
     //the directory containing the
     //the snapshot directory
+    //快照文件目录
     private final File snapDir;
+    //事物日志组件
     private TxnLog txnLog;
+    //快照文件组件
     private SnapShot snapLog;
     public final static int VERSION = 2;
     public final static String version = "version-";
@@ -126,11 +130,16 @@ public class FileTxnSnapLog {
      * database restoration
      * @return the highest zxid restored
      * @throws IOException
+     * 从快照文件和事物日志文件恢复内存数据库
      */
     public long restore(DataTree dt, Map<Long, Integer> sessions, 
             PlayBackListener listener) throws IOException {
+        //从最近的快照中对数据树进行反序列化
         snapLog.deserialize(dt, sessions);
+        //事物日志文件目录
         FileTxnLog txnLog = new FileTxnLog(dataDir);
+        //快照文件并不是全量的数据，需要从快照加载的最新zxid开始，从事物日志加载后续的数据来组成完成的数据
+        //从事物日志中定位出需要开始读取的zxid位置
         TxnIterator itr = txnLog.read(dt.lastProcessedZxid+1);
         long highestZxid = dt.lastProcessedZxid;
         TxnHeader hdr;
@@ -150,15 +159,18 @@ public class FileTxnSnapLog {
                 highestZxid = hdr.getZxid();
             }
             try {
+                //把事务操作在内存中再执行一遍把丢失的操作补回来
                 processTransaction(hdr,dt,sessions, itr.getTxn());
             } catch(KeeperException.NoNodeException e) {
                throw new IOException("Failed to process transaction type: " +
                      hdr.getType() + " error: " + e.getMessage(), e);
             }
+            //同时将事务操作通过PlayBackListener添加到commitedLog集合，commitedLog的事务操作在服务恢复的时候会同步到其他leaner server, 因为很有可能其他leaner server也没有及时的takesnapshot
             listener.onTxnLoaded(hdr, itr.getTxn());
             if (!itr.next()) 
                 break;
         }
+        //最终返回恢复内存数据库的最大zxid
         return highestZxid;
     }
     
@@ -237,6 +249,7 @@ public class FileTxnSnapLog {
     public void save(DataTree dataTree,
             ConcurrentHashMap<Long, Integer> sessionsWithTimeouts)
         throws IOException {
+        //lastProcessedZxid是volatile修饰
         long lastZxid = dataTree.lastProcessedZxid;
         File snapshotFile = new File(snapDir, Util.makeSnapshotName(lastZxid));
         LOG.info("Snapshotting: 0x{} to {}", Long.toHexString(lastZxid),

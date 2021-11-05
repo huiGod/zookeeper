@@ -340,7 +340,9 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         if (cnxn == null) {
             return;
         }
+        //客户端sessionId
         long id = cnxn.getSessionId();
+        //session过期时间
         int to = cnxn.getSessionTimeout();
         if (!sessionTracker.touchSession(id, to)) {
             throw new MissingSessionException(
@@ -632,7 +634,11 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         Request si = new Request(cnxn, sessionId, xid, type, bb, authInfo);
         submitRequest(si);
     }
-    
+
+    /**
+     * 处理客户端发送过来的所有请求（排除ping auth特殊类型）
+     * @param si
+     */
     public void submitRequest(Request si) {
         if (firstProcessor == null) {
             synchronized (this) {
@@ -929,6 +935,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                 Request si = new Request(cnxn, cnxn.getSessionId(), h.getXid(),
                   h.getType(), incomingBuffer, cnxn.getAuthInfo());
                 si.setOwner(ServerCnxn.me);
+                //请求链式处理
                 submitRequest(si);
             }
         }
@@ -976,7 +983,8 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         // wrap SASL response token to client inside a Response object.
         return new SetSASLResponse(responseToken);
     }
-    
+
+
     public ProcessTxnResult processTxn(TxnHeader hdr, Record txn) {
         ProcessTxnResult rc;
         int opCode = hdr.getType();

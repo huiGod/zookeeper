@@ -185,17 +185,19 @@ public class FileTxnLog implements TxnLog {
      * @param txn the transaction part of the entry
      * returns true iff something appended, otw false
      *
-     * 追加事物日志到快照文件
+     * 追加事物日志到文件，只是进入文件流的缓存中
      */
     public synchronized boolean append(TxnHeader hdr, Record txn)
         throws IOException
     {
+        //事物日志才返回true
         if (hdr != null) {
             if (hdr.getZxid() <= lastZxidSeen) {
                 LOG.warn("Current zxid " + hdr.getZxid()
                         + " is <= " + lastZxidSeen + " for "
                         + hdr.getType());
             }
+            //用消息的zxid命名为新的日志文件
             if (logStream==null) {
                if(LOG.isInfoEnabled()){
                     LOG.info("Creating new log file: log." +  
@@ -220,9 +222,11 @@ public class FileTxnLog implements TxnLog {
                 throw new IOException("Faulty serialization for header " +
                         "and txn");
             }
+            //写校验和
             Checksum crc = makeChecksumAlgorithm();
             crc.update(buf, 0, buf.length);
             //写入checksum和数据
+            //直接基于IO流写入
             oa.writeLong(crc.getValue(), "txnEntryCRC");
             Util.writeTxnBytes(oa, buf);
             
@@ -253,6 +257,7 @@ public class FileTxnLog implements TxnLog {
         long logZxid = 0;
         // Find the log file that starts before or at the same time as the
         // zxid of the snapshot
+        //从事物日志文件中找到刚好小于快照zxid命名的文件
         for (File f : files) {
             long fzxid = Util.getZxidFromName(f.getName(), "log");
             if (fzxid > snapshotZxid) {
@@ -264,6 +269,7 @@ public class FileTxnLog implements TxnLog {
                 logZxid = fzxid;
             }
         }
+        //比上述文件更新的事物日志文件都需要加载
         List<File> v=new ArrayList<File>(5);
         for (File f : files) {
             long fzxid = Util.getZxidFromName(f.getName(), "log");
@@ -308,14 +314,19 @@ public class FileTxnLog implements TxnLog {
      * disk
      */
     public synchronized void commit() throws IOException {
+        //将当前日志文件数据刷入磁盘
         if (logStream != null) {
             logStream.flush();
         }
+        //将所有的磁盘文件刷盘
         for (FileOutputStream log : streamsToFlush) {
+            //刷盘
             log.flush();
+            //默认是true
             if (forceSync) {
                 long startSyncNS = System.nanoTime();
 
+                //如果有必要从os cache刷入底层磁盘中
                 log.getChannel().force(false);
 
                 long syncElapsedMS =
@@ -329,6 +340,7 @@ public class FileTxnLog implements TxnLog {
                 }
             }
         }
+        //清空streamsToFlush文件数据
         while (streamsToFlush.size() > 1) {
             streamsToFlush.removeFirst().close();
         }
@@ -504,6 +516,7 @@ public class FileTxnLog implements TxnLog {
         public FileTxnIterator(File logDir, long zxid) throws IOException {
           this.logDir = logDir;
           this.zxid = zxid;
+          //定位事物日志文件
           init();
         }
 
@@ -514,6 +527,7 @@ public class FileTxnLog implements TxnLog {
          */
         void init() throws IOException {
             storedFiles = new ArrayList<File>();
+            //加载所有的事物文件并且按照zxid的文件名降序
             List<File> files = Util.sortDataDir(FileTxnLog.getLogFiles(logDir.listFiles(), 0), "log", false);
             for (File f: files) {
                 if (Util.getZxidFromName(f.getName(), "log") >= zxid) {
@@ -522,12 +536,15 @@ public class FileTxnLog implements TxnLog {
                 // add the last logfile that is less than the zxid
                 else if (Util.getZxidFromName(f.getName(), "log") < zxid) {
                     storedFiles.add(f);
+                    //直到找到比zxid要小的文件名为止，在这之后的事物日志文件都是需要加载的数据
                     break;
                 }
             }
+            //加载最后一个文件，并从storedFiles移除
             goToNextLog();
             if (!next())
                 return;
+            //一条一条的事物日志进行读取，直到读取到刚好大于zxid为止
             while (hdr.getZxid() < zxid) {
                 if (!next())
                     return;

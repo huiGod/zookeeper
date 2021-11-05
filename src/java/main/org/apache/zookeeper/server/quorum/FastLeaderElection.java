@@ -203,7 +203,7 @@ public class FastLeaderElection implements Election {
                 while (!stop) {
                     // Sleeps on receive
                     try{
-                        //从recvQueue队列获取网络响应数据进行后续处理
+                        //从recvQueue队列阻塞获取选票数据
                         response = manager.pollRecvQueue(3000, TimeUnit.MILLISECONDS);
                         if(response == null) continue;
 
@@ -292,7 +292,7 @@ public class FastLeaderElection implements Election {
                              */
 
                             if(self.getPeerState() == QuorumPeer.ServerState.LOOKING){
-                                //如果当前server的状态是LOOKING，则继续发送接收到的Notification消息进行再次投票
+                                //如果当前server的状态是LOOKING，则将接收到的选票放入到接收选票队列中
                                 recvqueue.offer(n);
 
                                 /*
@@ -300,7 +300,8 @@ public class FastLeaderElection implements Election {
                                  * message is also looking and its logical clock is
                                  * lagging behind.
                                  */
-                                //如果响应的数据是LOOKING状态，则发送当前server的投票信息
+                                //如果响应的数据是LOOKING状态，并且版本号小于当前节点版本号，说明该节点的选票无效
+                                //则将当前节点选票发送过去
                                 if((ackstate == QuorumPeer.ServerState.LOOKING)
                                         && (n.electionEpoch < logicalclock)){
                                     Vote v = getVote();
@@ -355,6 +356,9 @@ public class FastLeaderElection implements Election {
          * and queues it on the manager's queue.
          */
 
+        /**
+         * WorkerSender线程发送选票
+         */
         class WorkerSender implements Runnable {
             volatile boolean stop;
             QuorumCnxManager manager;
@@ -367,6 +371,7 @@ public class FastLeaderElection implements Election {
             public void run() {
                 while (!stop) {
                     try {
+                        //从sendqueue队列阻塞获取需要发送的选票数据
                         ToSend m = sendqueue.poll(3000, TimeUnit.MILLISECONDS);
                         if(m == null) continue;
 
@@ -385,6 +390,7 @@ public class FastLeaderElection implements Election {
              * @param m     message to send
              */
             private void process(ToSend m) {
+                //选票格式
                 byte requestBytes[] = new byte[36];
                 ByteBuffer requestBuffer = ByteBuffer.wrap(requestBytes);
 
@@ -392,6 +398,7 @@ public class FastLeaderElection implements Election {
                  * Building notification packet to send
                  */
 
+                //自定义选票数据网络传输协议
                 requestBuffer.clear();
                 requestBuffer.putInt(m.state.ordinal());
                 requestBuffer.putLong(m.leader);
@@ -493,10 +500,10 @@ public class FastLeaderElection implements Election {
         proposedLeader = -1;
         proposedZxid = -1;
 
-        //初始化队列
+        //初始化无界队列，用于存放发送与接收选票
         sendqueue = new LinkedBlockingQueue<ToSend>();
         recvqueue = new LinkedBlockingQueue<Notification>();
-        //初始化Messenger组件，用不同的线程来处理网络传输的数据
+        //初始化Messenger组件，用不同的线程来处理网络传输发送与接收数据逻辑
         this.messenger = new Messenger(manager);
     }
 
@@ -887,7 +894,7 @@ public class FastLeaderElection implements Election {
                         recvset.put(n.sid, new Vote(n.leader, n.zxid, n.electionEpoch, n.peerEpoch));
 
 
-                        //判断本轮选举是否可以结束了。如果不可用结束，执行后续的 break，进入下一轮循环从recvqueue获取选票
+                        //判断本轮选举是否可以结束了。如果不可结束，执行后续的 break，进入下一轮循环从recvqueue获取选票
 
                         //尝试通过现在已经收到的信息，判断是否已经足够确认最终的leader了，通过方法termPredicate() ，
                         //判断标准很简单：是否已经有超过半数的机器所推举的leader为当前自己所推举的leader.

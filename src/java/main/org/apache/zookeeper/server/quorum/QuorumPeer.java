@@ -471,7 +471,7 @@ public class QuorumPeer extends Thread implements QuorumStats.Provider {
     }
     synchronized public void startLeaderElection() {
     	try {
-    	  //通过 myid、zxid 和 epoch构造投票的选票
+    	  //通过 myid、zxid 和 epoch构造当前节点自己的选票
     		currentVote = new Vote(myid, getLastLoggedZxid(), getCurrentEpoch());
     	} catch(IOException e) {
     		RuntimeException re = new RuntimeException(e.getMessage());

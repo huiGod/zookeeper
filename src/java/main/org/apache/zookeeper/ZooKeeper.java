@@ -739,7 +739,7 @@ public class ZooKeeper {
      * such a node is created, the sequential number will be incremented by one.
      * <p>
      * If a node with the same actual path already exists in the ZooKeeper, a
-     * KeeperException with error code KeeperException.NodeExists will be
+     * KeeperException with error code KeeperException.NodeExists will beZooKeeper
      * thrown. Note that since a different actual path is used for each
      * invocation of creating sequential node with the same path argument, the
      * call will never throw "file exists" KeeperException.
@@ -786,17 +786,20 @@ public class ZooKeeper {
 
         final String serverPath = prependChroot(clientPath);
 
+        //创建create请求类型
         RequestHeader h = new RequestHeader();
         h.setType(ZooDefs.OpCode.create);
         CreateRequest request = new CreateRequest();
         CreateResponse response = new CreateResponse();
         request.setData(data);
+        //节点类型封装为了toFlag
         request.setFlags(createMode.toFlag());
         request.setPath(serverPath);
         if (acl != null && acl.size() == 0) {
             throw new KeeperException.InvalidACLException();
         }
         request.setAcl(acl);
+        //交给客户端ClientCnxn处理请求
         ReplyHeader r = cnxn.submitRequest(h, request, response, null);
         if (r.getErr() != 0) {
             throw KeeperException.create(KeeperException.Code.get(r.getErr()),

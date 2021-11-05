@@ -306,6 +306,7 @@ public class Leader {
                         // in LearnerHandler switch to the syncLimit
                         s.setSoTimeout(self.tickTime * self.initLimit);
                         s.setTcpNoDelay(nodelay);
+                        //将与follower连接封装为单独线程LearnerHandler，负责IO通信
                         LearnerHandler fh = new LearnerHandler(s, Leader.this);
                         fh.start();
                     } catch (SocketException e) {
@@ -571,7 +572,7 @@ public class Leader {
             // The proposal has already been committed
             return;
         }
-        //获取发送给follower的消息
+        //获取发送给follower的Proposal消息
         Proposal p = outstandingProposals.get(zxid);
         if (p == null) {
             LOG.warn("Trying to commit future proposal: zxid 0x{} from {}",
@@ -580,6 +581,7 @@ public class Leader {
         }
 
         //通过消息本身ackSet来存储哪个follower发送过ack
+        //这里记录哪个follower接收到了消息，返回了ack
         p.ackSet.add(sid);
         if (LOG.isDebugEnabled()) {
             LOG.debug("Count for zxid: 0x{} is {}",
@@ -595,6 +597,7 @@ public class Leader {
             //接收到大多数ack后从outstandingProposals中移除，加入到toBeApplied队列
             outstandingProposals.remove(zxid);
             if (p.request != null) {
+                //加入到toBeApplied队列
                 toBeApplied.add(p);
             }
             // We don't commit the new leader proposal
@@ -602,12 +605,13 @@ public class Leader {
                 if (p.request == null) {
                     LOG.warn("Going to commmit null request for proposal: {}", p);
                 }
-                //开始commit消息，将消息发送给其他所有follower
+                //发送COMMIT类型消息给其他所有follower
                 commit(zxid);
 
                 //发送INFORM到Observer
                 inform(p);
 
+                //执行commitProcessor处理器的commit方法
                 zk.commitProcessor.commit(p.request);
                 if(pendingSyncs.containsKey(zxid)){
                     for(LearnerSyncRequest r: pendingSyncs.remove(zxid)) {
@@ -660,6 +664,8 @@ public class Leader {
          * 
          * @see org.apache.zookeeper.server.RequestProcessor#processRequest(org.apache.zookeeper.server.Request)
          */
+        //该处理器没有做什么核心工作，直接交给下一个process处理
+        //从toBeApplied队列移除
         public void processRequest(Request request) throws RequestProcessorException {
             // request.addRQRec(">tobe");
             next.processRequest(request);
@@ -782,6 +788,7 @@ public class Leader {
         } catch (IOException e) {
             LOG.warn("This really should be impossible", e);
         }
+        //封装PROPOSAL消息
         QuorumPacket pp = new QuorumPacket(Leader.PROPOSAL, request.zxid, 
                 baos.toByteArray(), null);
         
@@ -794,7 +801,7 @@ public class Leader {
             }
 
             lastProposed = p.packet.getZxid();
-            //将进行2pc需要同步的消息入outstandingProposals队列，后续接收到大多数ack响应后，从这里来获取对应的消息
+            //将发送出去的proposal消息放入到outstandingProposals队列，后续接收到大多数ack响应后，从这里来获取对应的消息
             outstandingProposals.put(lastProposed, p);
             //发送给所有的follower
             sendPacket(pp);

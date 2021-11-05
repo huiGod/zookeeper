@@ -92,6 +92,8 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
         maxClientCnxns = maxcc;
         //创建ServerSocketChannel
         this.ss = ServerSocketChannel.open();
+        //当连接关闭的时候socket会处于一段时间的TIME_WAIT状态，会导致无法再次绑定该地址和端口号
+        //设置为true后可以在socket关闭后随时再次启动绑定地址和端口
         ss.socket().setReuseAddress(true);
         LOG.info("binding to port " + addr);
         ss.socket().bind(addr);
@@ -198,8 +200,9 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
                         SocketChannel sc = ((ServerSocketChannel) k
                                 .channel()).accept();
                         InetAddress ia = sc.socket().getInetAddress();
+                        //获取指定ip的连接数
                         int cnxncount = getClientCnxnCount(ia);
-                        //如果客户端连接数大于了maxClientCnxns，则关闭连接
+                        //单个客户端连接数超过限制
                         if (maxClientCnxns > 0 && cnxncount >= maxClientCnxns){
                             LOG.warn("Too many connections from " + ia
                                      + " - max is " + maxClientCnxns );
@@ -215,6 +218,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
                             //封装为NIOServerCnxn
                             NIOServerCnxn cnxn = createConnection(sc, sk);
                             //后续有事件触发了可以获取到这里的NIOServerCnxn
+                            //经典attach做法，将socket与selectionKey绑定起来后续使用
                             sk.attach(cnxn);
                             //维护全局NIOServerCnxn
                             addCnxn(cnxn);

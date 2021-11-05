@@ -111,7 +111,7 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                     //修改标识，只会再第一次执行该else if逻辑
                     initialized = true;
                 } else {
-                    //再第一次读取完ConnectResponse后，后续读取数据逻辑都是这里
+                    //在第一次读取完ConnectResponse后，后续读取数据逻辑都是这里
                     sendThread.readResponse(incomingBuffer);
                     //重置缓冲区
                     lenBuffer.clear();
@@ -148,6 +148,8 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                         //如果发送完成，则从outgoingQueue队列移除，并且添加到pendingQueue队列中
                         sentCount++;
                         outgoingQueue.removeFirstOccurrence(p);
+                        //connectRequest请求的requestHeader是null，因此不会加入到pendingQueue队列
+                        //ping、auth类型的请求都不会加入到pendingQueue队列
                         if (p.requestHeader != null
                                 && p.requestHeader.getType() != OpCode.ping
                                 && p.requestHeader.getType() != OpCode.auth) {
@@ -371,6 +373,7 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                      ClientCnxn cnxn)
             throws IOException, InterruptedException {
         //获取准备就绪事件
+        //每个客户端都会持有自己的Selector
         selector.select(waitTimeOut);
         Set<SelectionKey> selected;
         synchronized (this) {
@@ -395,6 +398,9 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
                 doIO(pendingQueue, outgoingQueue, cnxn);
             }
         }
+
+        //每次执行完一轮select后，判断是否有数据需要发送出去，并关注OP_WRITE
+        //并在执行具体的OP_WRITE逻辑的时候，每发送完一个数据，都会判断是否还需要继续关注OP_WRITE
         if (sendThread.getZkState().isConnected()) {
             synchronized(outgoingQueue) {
                 if (findSendablePacket(outgoingQueue,

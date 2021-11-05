@@ -73,6 +73,8 @@ import org.apache.zookeeper.OpResult.ErrorResult;
  *
  * This RequestProcessor counts on ZooKeeperServer to populate the
  * outstandingRequests member of ZooKeeperServer.
+ *
+ * 返回给客户端响应数据
  */
 public class FinalRequestProcessor implements RequestProcessor {
     private static final Logger LOG = LoggerFactory.getLogger(FinalRequestProcessor.class);
@@ -113,6 +115,7 @@ public class FinalRequestProcessor implements RequestProcessor {
                TxnHeader hdr = request.hdr;
                Record txn = request.txn;
 
+               //处理内存中的数据
                rc = zks.processTxn(hdr, txn);
             }
             // do not add non quorum packets to the queue.
@@ -401,6 +404,7 @@ public class FinalRequestProcessor implements RequestProcessor {
                     request.createTime, System.currentTimeMillis());
 
         try {
+            //通过NIO返回给客户端响应数据
             cnxn.sendResponse(hdr, rsp, "response");
             if (closeSession) {
                 cnxn.sendCloseSession();

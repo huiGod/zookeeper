@@ -78,6 +78,7 @@ public class FollowerRequestProcessor extends Thread implements
                     zks.pendingSyncs.add(request);
                     zks.getFollower().request(request);
                     break;
+                    //将请求通过bio转发给Leader
                 case OpCode.create:
                 case OpCode.delete:
                 case OpCode.setData:
@@ -95,6 +96,10 @@ public class FollowerRequestProcessor extends Thread implements
         LOG.info("FollowerRequestProcessor exited loop!");
     }
 
+    /**
+     * 所有请求都放入队列中，可以保证请求的一致性！！！！
+     * @param request
+     */
     public void processRequest(Request request) {
         if (!finished) {
             queuedRequests.add(request);

@@ -68,10 +68,13 @@ public class NIOServerCnxn extends ServerCnxn {
 
     boolean initialized;
 
+    //读取客户端请求数据时使用，这些读写ByteBuffer都封装在当前客户端连接中
+    //便于处理粘包与拆包等
     ByteBuffer lenBuffer = ByteBuffer.allocate(4);
 
     ByteBuffer incomingBuffer = lenBuffer;
 
+    //每个客户端连接都有一个待发送消息的队列
     LinkedBlockingQueue<ByteBuffer> outgoingBuffers = new LinkedBlockingQueue<ByteBuffer>();
 
     int sessionTimeout;
@@ -104,13 +107,16 @@ public class NIOServerCnxn extends ServerCnxn {
         if (zk != null) { 
             outstandingLimit = zk.getGlobalOutstandingLimit();
         }
+        //禁用delay算法，避免消息延时
         sock.socket().setTcpNoDelay(true);
         /* set socket linger to false, so that socket close does not
          * block */
+        //SOCKET在CLOSE时候是否等待缓冲区发送完成
         sock.socket().setSoLinger(false, -1);
         InetAddress addr = ((InetSocketAddress) sock.socket()
                 .getRemoteSocketAddress()).getAddress();
         authInfo.add(new Id("ip", addr.getHostAddress()));
+        //客户端连接关注OP_READ事件
         sk.interestOps(SelectionKey.OP_READ);
     }
 
@@ -164,6 +170,7 @@ public class NIOServerCnxn extends ServerCnxn {
                 }
             }
 
+            //如果出现拆包加入outgoingBuffers队列继续发送
             synchronized(this.factory){
                 sk.selector().wakeup();
                 if (LOG.isTraceEnabled()) {
@@ -183,7 +190,7 @@ public class NIOServerCnxn extends ServerCnxn {
 
     /** Read the request payload (everything following the length prefix) */
     private void readPayload() throws IOException, InterruptedException {
-        //发生拆包与粘包incomingBuffer未读满，继续读
+        //数据的data未读满，继续从socket读取
         if (incomingBuffer.remaining() != 0) { // have we read length bytes?
             int rc = sock.read(incomingBuffer); // sock is non-blocking, so ok
             if (rc < 0) {
@@ -194,18 +201,20 @@ public class NIOServerCnxn extends ServerCnxn {
             }
         }
 
-        //完整数据读取完成
+        //完整data数据读取完成
         if (incomingBuffer.remaining() == 0) { // have we read length bytes?
             packetReceived();
             incomingBuffer.flip();
-            //如果连接是刚创建完成，接收到的第一个请求会是ConnectRequest，特殊处理
+            //如果连接是刚创建完成，客户端发送的一定是ConnectRequest，特殊处理
             if (!initialized) {
                 readConnectRequest();
             } else {
                 //非ConnectRequest处理逻辑
                 readRequest();
             }
+            //清空lenBuffer
             lenBuffer.clear();
+            //处理完一个完整请求后，重置incomingBuffer
             incomingBuffer = lenBuffer;
         }
     }
@@ -218,22 +227,25 @@ public class NIOServerCnxn extends ServerCnxn {
 
                 return;
             }
-            //处理可读事件
+            //处理可读事件，消息由header(4字节)+data组成
             if (k.isReadable()) {
-                //首先读取4个字节
+                //incomingBuffer初始化为4个字节，读取消息header
                 int rc = sock.read(incomingBuffer);
+                //如果读取结果为-1抛异常(都是这么处理的)
                 if (rc < 0) {
                     throw new EndOfStreamException(
                             "Unable to read additional data from client sessionid 0x"
                             + Long.toHexString(sessionId)
                             + ", likely client has closed socket");
                 }
-                //读取到完整4个字节
+                //如果未读取到4个字节，则无需处理等下一次读事件继续来读取
                 if (incomingBuffer.remaining() == 0) {
                     boolean isPayload;
+                    //如果incomingBuffer是初始的4个字节lenBuffer，则表示读取到的是header数据
+                    //后续读取data数据（非header）的时候，这里是不相等的
                     if (incomingBuffer == lenBuffer) { // start of next request
                         incomingBuffer.flip();
-                        //读取4个字节的int长度，并初始化为incomingBuffer的长度共后续读取
+                        //读取4个字节的int长度，并初始化incomingBuffer为对应长度来读取data数据
                         isPayload = readLength(k);
                         incomingBuffer.clear();
                     } else {
@@ -241,7 +253,7 @@ public class NIOServerCnxn extends ServerCnxn {
                         isPayload = true;
                     }
                     if (isPayload) { // not the case for 4letterword
-                        //读取接收到的请求数据
+                        //读取data数据
                         readPayload();
                     }
                     else {
@@ -343,6 +355,7 @@ public class NIOServerCnxn extends ServerCnxn {
                     // outgoingBuffers.size() = " + outgoingBuffers.size());
                 }
 
+                //判断当前连接是否还需要继续关注OP_WRITE
                 //查看outgoingBuffers队列是否已经发送完成，并且确定是否继续关注OP_WRITE事件
                 synchronized(this.factory){
                     if (outgoingBuffers.size() == 0) {
@@ -385,6 +398,10 @@ public class NIOServerCnxn extends ServerCnxn {
         }
     }
 
+    /**
+     * 其他请求执行逻辑
+     * @throws IOException
+     */
     private void readRequest() throws IOException {
         zkServer.processPacket(this, incomingBuffer);
     }
@@ -432,6 +449,7 @@ public class NIOServerCnxn extends ServerCnxn {
             throw new IOException("ZooKeeperServer not running");
         }
         zkServer.processConnectRequest(this, incomingBuffer);
+        //只有第一次请求是连接请求，重置标识符
         initialized = true;
     }
 
@@ -939,6 +957,7 @@ public class NIOServerCnxn extends ServerCnxn {
     private boolean readLength(SelectionKey k) throws IOException {
         // Read the length, now get the buffer
         int len = lenBuffer.getInt();
+        //如果读取到的是4个字符
         if (!initialized && checkFourLetterWord(sk, len)) {
             return false;
         }
@@ -1098,6 +1117,7 @@ public class NIOServerCnxn extends ServerCnxn {
             byte b[] = baos.toByteArray();
             ByteBuffer bb = ByteBuffer.wrap(b);
             bb.putInt(b.length - 4).rewind();
+            //序列化需要发送的数据后发送出去
             sendBuffer(bb);
             if (h.getXid() > 0) {
                 synchronized(this){

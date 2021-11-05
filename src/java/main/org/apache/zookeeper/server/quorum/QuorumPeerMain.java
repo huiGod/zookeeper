@@ -148,6 +148,7 @@ public class QuorumPeerMain {
           quorumPeer = new QuorumPeer();
           quorumPeer.setClientPortAddress(config.getClientPortAddress());
           //管理磁盘文件数据，用于启动时恢复日志数据
+          //初始化事物数据目录组件和快照目录组件
           quorumPeer.setTxnFactory(new FileTxnSnapLog(
                       new File(config.getDataLogDir()),
                       new File(config.getDataDir())));

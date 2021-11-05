@@ -77,6 +77,8 @@ public class FollowerZooKeeperServer extends LearnerZooKeeperServer {
         commitProcessor.start();
         firstProcessor = new FollowerRequestProcessor(this, commitProcessor);
         ((FollowerRequestProcessor) firstProcessor).start();
+
+
         syncProcessor = new SyncRequestProcessor(this,
                 new SendAckRequestProcessor((Learner)getFollower()));
         syncProcessor.start();
@@ -91,8 +93,10 @@ public class FollowerZooKeeperServer extends LearnerZooKeeperServer {
         request.txn = txn;
         request.zxid = hdr.getZxid();
         if ((request.zxid & 0xffffffffL) != 0) {
+            //Follower接收到的Proposal类型请求，将放入到pendingTxns队列中，后续执行commit操作时会依赖该队列保证数据的顺序一致性
             pendingTxns.add(request);
         }
+        //交给下一个处理器处理，将消息保存到事物日志文件
         syncProcessor.processRequest(request);
     }
 
@@ -102,6 +106,7 @@ public class FollowerZooKeeperServer extends LearnerZooKeeperServer {
      * the pendingTxns queue and hands it to the commitProcessor to commit.
      * @param zxid - must correspond to the head of pendingTxns if it exists
      */
+    //事物提交
     public void commit(long zxid) {
         if (pendingTxns.size() == 0) {
             LOG.warn("Committing " + Long.toHexString(zxid)

@@ -79,6 +79,7 @@ public class DataTree {
      * This hashtable provides a fast lookup to the datanodes. The tree is the
      * source of truth and is where all the locking occurs
      */
+    //根据path快速查询节点
     private final ConcurrentHashMap<String, DataNode> nodes =
         new ConcurrentHashMap<String, DataNode>();
 
@@ -113,6 +114,7 @@ public class DataTree {
     /**
      * This hashtable lists the paths of the ephemeral nodes of a session.
      */
+    //维护一个sessionId对应的多个临时节点
     private final Map<Long, HashSet<String>> ephemerals =
         new ConcurrentHashMap<Long, HashSet<String>>();
 
@@ -467,12 +469,15 @@ public class DataTree {
         stat.setAversion(0);
         stat.setEphemeralOwner(ephemeralOwner);
         DataNode parent = nodes.get(parentName);
+        //父节点不存在则抛错
         if (parent == null) {
             throw new KeeperException.NoNodeException();
         }
+        //对节点的父节点加锁进行操作
         synchronized (parent) {
             Set<String> children = parent.getChildren();
             if (children != null) {
+                //已经包含了path节点，再创建则抛错
                 if (children.contains(childName)) {
                     throw new KeeperException.NodeExistsException();
                 }
@@ -485,10 +490,14 @@ public class DataTree {
             parent.stat.setCversion(parentCVersion);
             parent.stat.setPzxid(zxid);
             Long longval = convertAcls(acl);
+            //构建需要创建的DataNode节点数据
             DataNode child = new DataNode(parent, data, longval, stat);
+            //追加到父节点下面
             parent.addChild(childName);
+            //维护path到节点的映射关系
             nodes.put(path, child);
             if (ephemeralOwner != 0) {
+                //如果是临时节点，也进行维护
                 HashSet<String> list = ephemerals.get(ephemeralOwner);
                 if (list == null) {
                     list = new HashSet<String>();
@@ -519,6 +528,7 @@ public class DataTree {
             updateCount(lastPrefix, 1);
             updateBytes(lastPrefix, data == null ? 0 : data.length);
         }
+        //触发2个监听器
         dataWatches.triggerWatch(path, Event.EventType.NodeCreated);
         childWatches.triggerWatch(parentName.equals("") ? "/" : parentName,
                 Event.EventType.NodeChildrenChanged);

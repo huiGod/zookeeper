@@ -66,7 +66,7 @@ public class Follower extends Learner{
         self.end_fle = 0;
         fzk.registerJMX(new FollowerBean(this, zk), self.jmxLocalPeerBean);
         try {
-            //查找leader
+            //根据投票结果的leader sid从配置文件中查找leader节点地址
             InetSocketAddress addr = findLeader();            
             try {
                 //创建与leader的网络连接
@@ -86,6 +86,7 @@ public class Follower extends Learner{
                 syncWithLeader(newEpochZxid);                
                 QuorumPacket qp = new QuorumPacket();
                 while (self.isRunning()) {
+                    //循环获取leader发送过来的消息并处理
                     readPacket(qp);
                     processPacket(qp);
                 }
@@ -115,7 +116,7 @@ public class Follower extends Learner{
         case Leader.PING:            
             ping(qp);            
             break;
-        case Leader.PROPOSAL:            
+        case Leader.PROPOSAL:
             TxnHeader hdr = new TxnHeader();
             Record txn = SerializeUtils.deserializeTxn(qp.getData(), hdr);
             if (hdr.getZxid() != lastQueued + 1) {
@@ -125,9 +126,11 @@ public class Follower extends Learner{
                         + Long.toHexString(lastQueued + 1));
             }
             lastQueued = hdr.getZxid();
+            //处理leader发送过来的PROPOSAL类型消息
             fzk.logRequest(hdr, txn);
             break;
         case Leader.COMMIT:
+            //处理leader发送过来的COMMIT类型消息
             fzk.commit(qp.getZxid());
             break;
         case Leader.UPTODATE:

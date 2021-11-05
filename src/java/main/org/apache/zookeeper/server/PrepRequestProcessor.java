@@ -117,6 +117,7 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
     public void run() {
         try {
             while (true) {
+                //从队列获取数据
                 Request request = submittedRequests.take();
                 long traceMask = ZooTrace.CLIENT_REQUEST_TRACE_MASK;
                 if (request.type == OpCode.ping) {
@@ -293,7 +294,7 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
 
     /**
      * This method will be called inside the ProcessRequestThread, which is a
-     * singleton, so there will be a single thread calling this code.
+     * singleton, so there will be a single thread calling this code.F
      *
      * @param type
      * @param zxid
@@ -304,6 +305,7 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
     protected void pRequest2Txn(int type, long zxid, Request request, Record record, boolean deserialize)
         throws KeeperException, IOException, RequestProcessorException
     {
+        //封装请求头
         request.hdr = new TxnHeader(request.sessionId, request.cxid, zxid,
                                     zks.getTime(), type);
 
@@ -353,9 +355,11 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
                     // ignore this one
                 }
                 boolean ephemeralParent = parentRecord.stat.getEphemeralOwner() != 0;
+                //临时节点不能创建子节点
                 if (ephemeralParent) {
                     throw new KeeperException.NoChildrenForEphemeralsException(path);
                 }
+                //版本号+1
                 int newCversion = parentRecord.stat.getCversion()+1;
                 request.txn = new CreateTxn(path, createRequest.getData(),
                         listACL,
@@ -366,9 +370,11 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
                 }
                 parentRecord = parentRecord.duplicate(request.hdr.getZxid());
                 parentRecord.childCount++;
+                //版本号newCversion+1后重新赋值，下一次创建顺序节点，就可以拼上不同的序号
                 parentRecord.stat.setCversion(newCversion);
-                //数据加入队列
+                //维护节点数据到outstandingChanges队列
                 addChangeRecord(parentRecord);
+                //维护path和节点数据到outstandingChangesForPath结构中
                 addChangeRecord(new ChangeRecord(request.hdr.getZxid(), path, s,
                         0, listACL));
                 break;
@@ -516,6 +522,7 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
         
         try {
             switch (request.type) {
+                //处理客户端create请求
                 case OpCode.create:
                 CreateRequest createRequest = new CreateRequest();
                 pRequest2Txn(request.type, zks.getNextZxid(), request, createRequest, true);
@@ -656,7 +663,9 @@ public class PrepRequestProcessor extends Thread implements RequestProcessor {
                 request.txn = new ErrorTxn(Code.MARSHALLINGERROR.intValue());
             }
         }
+        //消息的zxid是简单递增生成的
         request.zxid = zks.getZxid();
+        //将请求交给下一个处理器处理
         nextProcessor.processRequest(request);
     }
 

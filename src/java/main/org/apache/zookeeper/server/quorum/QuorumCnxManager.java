@@ -179,7 +179,7 @@ public class QuorumCnxManager {
      * If this server has initiated the connection, then it gives up on the
      * connection if it loses challenge. Otherwise, it keeps the connection.
      *
-     * 通过myid的比较，有一些策略来关闭socket连接，避免重复创建
+     * 只能主动向比自己myid要小的节点创建连接，否则关闭该连接避免连接的浪费
      */
     public boolean initiateConnection(Socket sock, Long sid) {
         DataOutputStream dout = null;
@@ -195,7 +195,7 @@ public class QuorumCnxManager {
             return false;
         }
 
-        //如果服务端myid大于当前server的myid，则直接断开连接
+        //如果对方节点myid大于当前节点的myid，则直接断开连接
         // If lost the challenge, then drop the new connection
         if (sid > self.getId()) {
             LOG.info("Have smaller server identifier, so dropping the " +
@@ -204,6 +204,7 @@ public class QuorumCnxManager {
             // Otherwise proceed with the connection
         } else {
             //初始化发送与接收消息的线程
+            //作为服务端监听到请求后，处理逻辑一致
             SendWorker sw = new SendWorker(sock, sid);
             RecvWorker rw = new RecvWorker(sock, sid, sw);
             sw.setRecv(rw);
@@ -237,16 +238,18 @@ public class QuorumCnxManager {
      * to this server already or not. If it does, then it sends the smallest
      * possible long value to lose the challenge.
      *
-     * 作为服务端接收到其他 server 的连接后，需要判断是否重新创建了连接，有必要的话需要断开连接
-     * 客户端的sid小于当前server的sid时，断开连接
-     * 
+     * 每个 server 都会有 Listerer 来监听其他 server 作为客户端发起连接的创建
+     * server节点之间的socket通信，需要避免建立双向的连接，浪费资源
+     * 定义规则：
+     * 只能向比自己myid要小的server发起connect连接
+     *
      */
     public boolean receiveConnection(Socket sock) {
         Long sid = null;
         
         try {
             // Read server id
-            //接收客户端发送的 myid
+            //其他节点发起连接，如果连接成功创建则会发送属于自己的myid，作为服务端节点这里直接读取
             DataInputStream din = new DataInputStream(sock.getInputStream());
             sid = din.readLong();
             if (sid == QuorumPeer.OBSERVER_ID) {
@@ -265,7 +268,7 @@ public class QuorumCnxManager {
         }
         
         //If wins the challenge, then close the new connection.
-        //如果客户端的myid小于当前server的myid，则关闭该socket连接
+        //如果客户端server的myid小于当前server的myid，则关闭该socket连接
         if (sid < self.getId()) {
             /*
              * This replica might still believe that the connection to sid is
@@ -284,14 +287,13 @@ public class QuorumCnxManager {
             LOG.debug("Create new connection to server: " + sid);
             //关闭socket连接
             closeSocket(sock);
-            //每个 server 都会有 Listerer 来监听其他 server 作为客户端发起连接的创建
-            //并且每个 server只允许向比自己 myid 要小的 server 发起连接的创建
-            //不满足上述条件的 socket 会被删除，来避免重复的 socket 连接被创建
+            //关闭连接后，主动发起connect连接，因为当前myid一定是大于客户端节点的myid
             connectOne(sid);
 
             // Otherwise start worker threads to receive data.
         } else {
-            //如果连接正常建立则启动发送与接收消息的线程
+            //如果客户端server的myid大于当前server的myid，则表示该socket连接是有效的
+            //对该连接启动接受与发送线程来进行后续网络数据的通信
             SendWorker sw = new SendWorker(sock, sid);
             RecvWorker rw = new RecvWorker(sock, sid, sw);
             sw.setRecv(rw);
@@ -300,14 +302,17 @@ public class QuorumCnxManager {
             
             if(vsw != null)
                 vsw.finish();
-            
+
+            //全局持有
             senderWorkerMap.put(sid, sw);
             
             if (!queueSendMap.containsKey(sid)) {
+                //每个server对应的发送队列,队列为有界可阻塞容量为1
                 queueSendMap.put(sid, new ArrayBlockingQueue<ByteBuffer>(
                         SEND_CAPACITY));
             }
-            
+
+            //启动读写线程
             sw.start();
             rw.start();
             
@@ -324,7 +329,7 @@ public class QuorumCnxManager {
         /*
          * If sending message to myself, then simply enqueue it (loopback).
          */
-        //如果发送给当前server，则直接构造响应加入到响应队列
+        //如果发送给当前节点本身，则直接构造响应加入到响应队列
         if (self.getId() == sid) {
              b.position(0);
              addToRecvQueue(new Message(b.duplicate(), sid));
@@ -336,6 +341,7 @@ public class QuorumCnxManager {
               * Start a new connection if doesn't have one already.
               */
              if (!queueSendMap.containsKey(sid)) {
+                 //发送队列容量为1
                  ArrayBlockingQueue<ByteBuffer> bq = new ArrayBlockingQueue<ByteBuffer>(
                          SEND_CAPACITY);
                  //给指定myid初始化队列
@@ -350,7 +356,7 @@ public class QuorumCnxManager {
                      LOG.error("No queue for server " + sid);
                  }
              }
-             //同server建立网络连接
+             //发送数据给其他节点时，如果连接不存在，则创建网络连接
              connectOne(sid);
                 
         }
@@ -363,7 +369,7 @@ public class QuorumCnxManager {
      */
     
     synchronized void connectOne(long sid){
-        //连接不存在才出发创建新的socket连接
+        //连接不存在才创建新的socket连接
         if (senderWorkerMap.get(sid) == null){
             InetSocketAddress electionAddr;
             //从配置文件中获取server的地址
@@ -465,7 +471,9 @@ public class QuorumCnxManager {
      *            Reference to socket
      */
     private void setSockOpts(Socket sock) throws SocketException {
+        //关闭NoDelay算法，数据只有在写缓存中累积到一定量之后，才会被发送出去，这样明显提高了网络利用率，但是不可避免地增加了延时
         sock.setTcpNoDelay(true);
+        //设置read超时时间
         sock.setSoTimeout(self.tickTime * self.syncLimit);
     }
 
@@ -510,6 +518,7 @@ public class QuorumCnxManager {
         @Override
         public void run() {
             int numRetries = 0;
+            //重试机制，有异常将ServerSocket关闭再重试
             while((!shutdown) && (numRetries < 3)){
                 try {
                     ss = new ServerSocket();
@@ -525,7 +534,7 @@ public class QuorumCnxManager {
                     //循环监听指定端口号，有客户端连接则进行后续处理
                     while (!shutdown) {
                         Socket client = ss.accept();
-                        //设置客户端 Socket 的 NoDelay 和超时时间
+                        //设置客户端 Socket 的 TCP_NODELAY和SO_TIMEOUT超时时间
                         setSockOpts(client);
                         LOG.info("Received connection request "
                                 + client.getRemoteSocketAddress());
@@ -599,6 +608,7 @@ public class QuorumCnxManager {
             this.sock = sock;
             recvWorker = null;
             try {
+                //封装基于socket的输出流
                 dout = new DataOutputStream(sock.getOutputStream());
             } catch (IOException e) {
                 LOG.error("Unable to access socket output stream", e);
@@ -655,6 +665,7 @@ public class QuorumCnxManager {
             try {
                 b.position(0);
                 //从b中读取所有数据到字节数组msgBytes
+                //并且字节数组msgBytes就是b底层持有的字节数组，供后续通过array()获取
                 b.get(msgBytes);
             } catch (BufferUnderflowException be) {
                 LOG.error("BufferUnderflowException ", be);
@@ -706,7 +717,7 @@ public class QuorumCnxManager {
                         ArrayBlockingQueue<ByteBuffer> bq = queueSendMap
                                 .get(sid);
                         if (bq != null) {
-                            //从需要发送消息的队列中获取数据
+                            //从需要发送消息的队列中阻塞获取数据
                             b = pollSendQueue(bq, 1000, TimeUnit.MILLISECONDS);
                         } else {
                             LOG.error("No queue of incoming messages for " +
@@ -752,8 +763,10 @@ public class QuorumCnxManager {
             this.sock = sock;
             this.sw = sw;
             try {
+                //封装针对socket的输入流
                 din = new DataInputStream(sock.getInputStream());
                 // OK to wait until socket disconnects while reading.
+                //读取数据设置为不超时
                 sock.setSoTimeout(0);
             } catch (IOException e) {
                 LOG.error("Error while accessing socket for " + sid, e);
@@ -804,6 +817,7 @@ public class QuorumCnxManager {
                     byte[] msgArray = new byte[length];
                     din.readFully(msgArray, 0, length);
                     ByteBuffer message = ByteBuffer.wrap(msgArray);
+                    //读取到的数据放入全局的队列中
                     addToRecvQueue(new Message(message.duplicate(), sid));
                 }
             } catch (Exception e) {
@@ -831,7 +845,7 @@ public class QuorumCnxManager {
      * Unlike {@link #addToRecvQueue(Message) addToRecvQueue} this method does
      * not need to be synchronized since there is only one thread that inserts
      * an element in the queue and another thread that reads from the queue.
-     *
+     *FastLeaderElection
      * @param queue
      *          Reference to the Queue
      * @param buffer

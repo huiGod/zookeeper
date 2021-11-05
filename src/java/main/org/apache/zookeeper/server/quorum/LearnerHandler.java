@@ -136,6 +136,7 @@ public class LearnerHandler extends Thread {
                 if (p == null) {
                     //调用底层IO流的flush刷出缓冲区数据
                     bufferedOutput.flush();
+                    //如果队列数据为空，则阻塞获取
                     p = queuedPackets.take();
                 }
 
@@ -243,6 +244,7 @@ public class LearnerHandler extends Thread {
             //封装socket输出流
             oa = BinaryOutputArchive.getArchive(bufferedOutput);
 
+            //follower向leader发起connect连接后，会发送自己的sid，leader会优先读取并保存
             QuorumPacket qp = new QuorumPacket();
             ia.readRecord(qp, "packet");
             //只能接收到来自follower或者observer的消息
@@ -293,7 +295,7 @@ public class LearnerHandler extends Thread {
                 byte ver[] = new byte[4];
                 ByteBuffer.wrap(ver).putInt(0x10000);
                 QuorumPacket newEpochPacket = new QuorumPacket(Leader.LEADERINFO, ZxidUtils.makeZxid(newEpoch, 0), ver, null);
-                //向follower发送leader的zxid
+                //向follower发送LEADERINFO类型数据
                 oa.writeRecord(newEpochPacket, "packet");
                 bufferedOutput.flush();
                 QuorumPacket ackEpochPacket = new QuorumPacket();
@@ -303,7 +305,7 @@ public class LearnerHandler extends Thread {
                     LOG.error(ackEpochPacket.toString()
                             + " is not ACKEPOCH");
                     return;
-				}
+				        }
                 ByteBuffer bbepoch = ByteBuffer.wrap(ackEpochPacket.getData());
                 ss = new StateSummary(bbepoch.getInt(), ackEpochPacket.getZxid());
                 //等待大多数follower返回ack
@@ -487,6 +489,7 @@ public class LearnerHandler extends Thread {
             //
             queuedPackets.add(new QuorumPacket(Leader.UPTODATE, -1, null, null));
 
+            //准备工作处理完后，一直等待follower发送消息过来
             while (true) {
                 qp = new QuorumPacket();
                 ia.readRecord(qp, "packet");
@@ -516,6 +519,7 @@ public class LearnerHandler extends Thread {
                     }
                     leader.processAck(this.sid, qp.getZxid(), sock.getLocalSocketAddress());
                     break;
+                    //接收到ping消息类型
                 case Leader.PING:
                     // Process the touches
                     ByteArrayInputStream bis = new ByteArrayInputStream(qp

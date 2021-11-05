@@ -43,6 +43,7 @@ class AckRequestProcessor implements RequestProcessor {
     public void processRequest(Request request) {
         QuorumPeer self = leader.self;
         if(self != null)
+            //leader返回自己ack，然后判断是否满足大多数
             leader.processAck(self.getId(), request.zxid, null);
         else
             LOG.error("Null QuorumPeer");

@@ -38,15 +38,18 @@ public class CommitProcessor extends Thread implements RequestProcessor {
 
     /**
      * Requests that we are holding until the commit comes in.
+     * 接收到的消息，待执行commit操作
      */
     LinkedList<Request> queuedRequests = new LinkedList<Request>();
 
     /**
      * Requests that have been committed.
+     * 完成commit的请求
      */
     LinkedList<Request> committedRequests = new LinkedList<Request>();
 
     RequestProcessor nextProcessor;
+    //需要移交给下一个处理器处理的消息队列
     ArrayList<Request> toProcess = new ArrayList<Request>();
 
     /**
@@ -71,26 +74,29 @@ public class CommitProcessor extends Thread implements RequestProcessor {
             while (!finished) {
                 int len = toProcess.size();
                 for (int i = 0; i < len; i++) {
+                    //消息处理完commit后，交给下一个处理器处理
                     nextProcessor.processRequest(toProcess.get(i));
                 }
                 toProcess.clear();
                 synchronized (this) {
 
-                    //客户端可能发送很多消息过来，都会在queuedRequests中排队，一个一个请求一次去进行2pc处理
+                    //初始状态都在这里阻塞
 
-                    //没有请求到queuedRequests队列则阻塞
-                    //nextPending表示正在处理的请求
-                    //等待消息处理完2pc流程后，加入到committedRequests队列，并且在这里唤醒
+                    //leader收到消息后，放入到queuedRequests队列中，但是committedRequests仍然是空，所以会继续阻塞
+                    //需要等待消息的commit阶段完成，才会从这里返回
+
                     if ((queuedRequests.size() == 0 || nextPending != null)
                             && committedRequests.size() == 0) {
-                        //从queuedRequests队列获取到数据赋值给nextPending后，在这里仍然会阻塞等待
                         wait();
                         continue;
                     }
                     // First check and see if the commit came in for the pending
                     // request
+                    //当接收到commit通知时
                     if ((queuedRequests.size() == 0 || nextPending != null)
                             && committedRequests.size() > 0) {
+
+                        //从committedRequests队列移除消息
                         Request r = committedRequests.remove();
                         /*
                          * We match with nextPending so that we can move to the
@@ -106,6 +112,8 @@ public class CommitProcessor extends Thread implements RequestProcessor {
                             nextPending.hdr = r.hdr;
                             nextPending.txn = r.txn;
                             nextPending.zxid = r.zxid;
+                            //加入到toProcess队列让下一个处理器处理
+                            //nextPending消息接收到commit完成的通知，交给下一个处理器处理
                             toProcess.add(nextPending);
                             nextPending = null;
                         } else {
@@ -126,6 +134,7 @@ public class CommitProcessor extends Thread implements RequestProcessor {
                     // Process the next requests in the queuedRequests
                     //处理queuedRequests队列数据
                     while (nextPending == null && queuedRequests.size() > 0) {
+                        //将请求从queuedRequests队列移除
                         Request request = queuedRequests.remove();
                         switch (request.type) {
                         case OpCode.create:
@@ -135,6 +144,7 @@ public class CommitProcessor extends Thread implements RequestProcessor {
                         case OpCode.setACL:
                         case OpCode.createSession:
                         case OpCode.closeSession:
+                            //将请求赋值给nextPending
                             nextPending = request;
                             break;
                         case OpCode.sync:
@@ -158,6 +168,10 @@ public class CommitProcessor extends Thread implements RequestProcessor {
         LOG.info("CommitProcessor exited loop!");
     }
 
+    /**
+     * 事物数据完成第一阶段proposal后，执行该commit方法
+     * @param request
+     */
     synchronized public void commit(Request request) {
         if (!finished) {
             if (request == null) {
@@ -168,6 +182,7 @@ public class CommitProcessor extends Thread implements RequestProcessor {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Committing request:: " + request);
             }
+            //加入到待执行commit请求队列
             committedRequests.add(request);
             notifyAll();
         }

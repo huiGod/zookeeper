@@ -215,6 +215,7 @@ public class ZKDatabase {
      */
     public long loadDataBase() throws IOException {
         PlayBackListener listener=new PlayBackListener(){
+            //用来快速给Follower同步
             public void onTxnLoaded(TxnHeader hdr,Record txn){
                 Request r = new Request(null, 0, hdr.getCxid(),hdr.getType(),
                         null, null);
@@ -224,7 +225,8 @@ public class ZKDatabase {
                 addCommittedProposal(r);
             }
         };
-        
+
+        //从磁盘加载数据到内存中
         long zxid = snapLog.restore(dataTree,sessionsWithTimeouts,listener);
         initialized = true;
         return zxid;

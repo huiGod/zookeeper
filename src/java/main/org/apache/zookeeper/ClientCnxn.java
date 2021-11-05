@@ -116,11 +116,13 @@ public class ClientCnxn {
 
     /**
      * These are the packets that have been sent and are waiting for a response.
+     * 当前客户端连接待接收消息队列
      */
     private final LinkedList<Packet> pendingQueue = new LinkedList<Packet>();
 
     /**
      * These are the packets that need to be sent.
+     * 当前客户端连接待发送消息队列
      */
     private final LinkedList<Packet> outgoingQueue = new LinkedList<Packet>();
 
@@ -138,6 +140,7 @@ public class ClientCnxn {
 
     private final int sessionTimeout;
 
+    //客户端组件
     private final ZooKeeper zooKeeper;
 
     private final ClientWatchManager watcher;
@@ -156,8 +159,10 @@ public class ClientCnxn {
 
     final String chrootPath;
 
+    //负责IO处理
     final SendThread sendThread;
 
+    //负责事件回调
     final EventThread eventThread;
 
     /**
@@ -618,14 +623,13 @@ public class ClientCnxn {
             p.watchRegistration.register(p.replyHeader.getErr());
         }
 
+        //如果有回调则执行
         if (p.cb == null) {
             synchronized (p) {
                 p.finished = true;
-                //
                 p.notifyAll();
             }
         } else {
-            //如果有回调则触发
             p.finished = true;
             eventThread.queuePacket(p);
         }
@@ -1069,7 +1073,7 @@ public class ClientCnxn {
                         int timeToNextPing = readTimeout / 2
                                 - clientCnxnSocket.getIdleSend();
                         if (timeToNextPing <= 0) {
-                            //发送心跳
+                            //每次执行IO事件，都会判断是否需要发送心跳
                             sendPing();
                             //更新连接的lastSend
                             clientCnxnSocket.updateLastSend();
@@ -1334,9 +1338,12 @@ public class ClientCnxn {
             Record response, WatchRegistration watchRegistration)
             throws InterruptedException {
         ReplyHeader r = new ReplyHeader();
+        //将请求封装为Packet
         Packet packet = queuePacket(h, r, request, response, null, null, null,
                     null, watchRegistration);
         synchronized (packet) {
+            //阻塞等待响应结果
+            //客户端接收到响应后会将finished设置为true，并且唤醒这里的阻塞
             while (!packet.finished) {
                 packet.wait();
             }
@@ -1388,9 +1395,11 @@ public class ClientCnxn {
                 if (h.getType() == OpCode.closeSession) {
                     closing = true;
                 }
+                //将请求放入待发送队列
                 outgoingQueue.add(packet);
             }
         }
+        //唤醒socketChannel注册的selector执行select操作
         sendThread.getClientCnxnSocket().wakeupCnxn();
         return packet;
     }
